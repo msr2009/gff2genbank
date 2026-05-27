@@ -1,0 +1,27 @@
+# priority_groups.tsv — mock configuration for testing
+# Covers 6 diverse priority group types across different sources and featuretypes.
+# Groups are applied in order; first match wins.
+# Use * to match any value in source or featuretype.
+#
+group_name	source	featuretype	status
+# Classical alleles — named point mutations and small deletions from forward screens
+Classical allele	Allele	point_mutation	include
+Classical allele	Allele	deletion	include
+Classical allele	Allele	complex_substitution	include
+# Large-scale knockouts — knockout consortium and NBP library
+Knockout allele	NBP_knockout	*	include
+Knockout allele	KO_consortium	*	include
+# Million mutation project — EMS-mutagenised library, all featuretypes
+MMP allele	Million_mutation	*	include
+# RNAi reagents — any source with featuretype RNAi_reagent (covers Fly, Worm, etc.)
+RNAi reagent	*	RNAi_reagent	include
+# Transposable element insertions — structural variants from any source
+TE insertion	*	transposable_element_insertion_site	include
+TE insertion	*	insertion_site	include
+# Natural polymorphisms — population-level variation
+Polymorphism	Variation_project_Polymorphism	*	include
+Polymorphism	dbSNP	SNP	include
+# Exclude internal bookkeeping features not useful to end users
+_excluded_	WormBase	PCR_product	exclude
+_excluded_	WormBase	reagent	exclude
+_excluded_	WormBase	STS	exclude

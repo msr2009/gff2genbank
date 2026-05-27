@@ -1,0 +1,22 @@
+# priority_groups.tsv — C. elegans (WormBase) test configuration
+# Generated manually for testing s04 / server.py priority group loading.
+#
+# Tests covered:
+#   - Multiple groups with distinct sources
+#   - Wildcard featuretype (*) matching all featuretypes for a source
+#   - Multiple sources mapping to the same group (HTP alleles)
+#   - Exclude rows hiding features from the flat list
+#   - A source with a specific featuretype (not wildcard)
+#
+# First-match-wins order: Classical > MMP > HTP > Polymorphism > RNAi
+#
+group_name	source	featuretype	status
+Classical allele	Allele	*	include
+MMP allele	Million_mutation	*	include
+HTP allele	NBP_knockout	*	include
+HTP allele	KO_consortium	*	include
+Polymorphism	Variation_project_Polymorphism	*	include
+RNAi reagent	RNAi	RNAi_reagent	include
+# Exclude WormBase internal bookkeeping features from flat list
+_excluded_	WormBase	PCR_product	exclude
+_excluded_	WormBase	reagent	exclude

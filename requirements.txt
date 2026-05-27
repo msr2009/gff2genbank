@@ -1,0 +1,13 @@
+# Runtime dependencies for the GFF -> GenBank app.
+# Installed by shinyapps.io on deploy and locally with:
+#   pip install -r requirements.txt
+#
+# Setup-pipeline-only tools (samtools, bedtools, agat, cyvcf2) are NOT listed
+# here — they are needed when preparing the GFF/DB, not at runtime.
+
+shiny>=1.0
+shinywidgets>=0.3
+plotly>=5.0
+gffutils>=0.12
+pyfaidx>=0.7
+biopython>=1.80
