@@ -495,13 +495,25 @@ def process_gff(
     chrom_map: dict[str, str],
     keep_sources: set[str] | None,
     extra_lines: list[str],
+    keep_pairs: set[tuple[str, str]] | None = None,
+    progress=None,
 ) -> int:
     """
     Merge all input GFF files into one output, applying chromosome renaming
-    and optional source filtering.  Returns total feature lines written.
+    and optional filtering.  Streams line-by-line (bounded memory).  Returns
+    total feature lines written.
+
+    Filtering (both optional, AND-combined when both are given):
+      keep_sources  — keep only lines whose source column is in this set.
+      keep_pairs    — keep only lines whose (source, featuretype) pair is in
+                      this set.  Used by the setup GUI for fine-grained
+                      size-trimming; the CLI passes only keep_sources.
+    progress: optional callable(str) called every ~1M input lines so a GUI can
+              show live progress on enormous files.
     """
     out_opener = gzip.open if str(out_path).endswith(".gz") else open
     written = 0
+    seen = 0
     header_done = False
 
     with out_opener(out_path, "wt") as fh_out:
@@ -514,10 +526,15 @@ def process_gff(
                             fh_out.write(line)
                         continue
                     header_done = True
+                    seen += 1
+                    if progress and seen % 1_000_000 == 0:
+                        progress(f"  read {seen:,} lines, kept {written:,}…")
                     parts = line.split("\t")
                     if len(parts) < 9:
                         continue
                     if keep_sources and parts[1] not in keep_sources:
+                        continue
+                    if keep_pairs is not None and (parts[1], parts[2]) not in keep_pairs:
                         continue
                     parts[0] = chrom_map.get(parts[0], parts[0])
                     fh_out.write("\t".join(parts))
@@ -533,57 +550,89 @@ def process_gff(
 # GFF sorting
 # ---------------------------------------------------------------------------
 
-def sort_gff_inplace(gff_path: Path, debug: bool = False) -> None:
+def sort_gff_inplace(gff_path: Path, debug: bool = False, log=None) -> None:
     """
-    Sort a GFF3 file by chromosome then start position, in-place via a temp
-    file.  Uses bedtools sort if available, otherwise pure-Python fallback.
+    Sort a GFF3 file by chromosome then start position, in-place.
+
+    Memory-bounded for very large GFFs: the file is never held in memory.
+    Comment/header lines (few) are kept in memory; data lines are streamed to a
+    temp file and sorted by an *external* sorter that spills to disk —
+    GNU/BSD ``sort`` (always present) preferred, then ``bedtools``, then a
+    pure-Python in-memory fallback only if neither CLI exists. The sorted data
+    is then streamed back into the output (gzip-aware), so peak RSS stays at a
+    few tens of MB regardless of input size.
+
+    log: optional callable(str) for progress (defaults to print).
     """
+    emit = log if log is not None else (lambda m: print(m, flush=True))
     compressed = str(gff_path).endswith(".gz")
-    tmp_path   = Path(str(gff_path) + ".sort_tmp")
+    in_opener  = gzip.open if compressed else open
 
-    opener = gzip.open if compressed else open
+    data_tmp   = Path(str(gff_path) + ".data_tmp")
+    sorted_tmp = Path(str(gff_path) + ".sorted_tmp")
+    out_tmp    = Path(str(gff_path) + ".out_tmp")
+
+    # ── Pass 1: split header (small, in memory) from data (streamed to disk) ─
     header_lines: list[str] = []
-    data_lines:   list[str] = []
-    with opener(gff_path, "rt") as fh:
+    n = 0
+    with in_opener(gff_path, "rt") as fh, open(data_tmp, "w") as dt:
         for line in fh:
-            (header_lines if line.startswith("#") else data_lines).append(line)
+            if line.startswith("#"):
+                header_lines.append(line)
+            else:
+                dt.write(line)
+                n += 1
+                if n % 1_000_000 == 0:
+                    emit(f"  prepared {n:,} lines for sorting…")
 
-    bedtools_ok = shutil.which("bedtools") is not None
-    sorted_lines: list[str] = []
-
-    if bedtools_ok:
+    # ── Sort the data temp with the lowest-memory tool available ────────────
+    used = None
+    if shutil.which("sort"):
         try:
-            with tempfile.NamedTemporaryFile(
-                mode="w", suffix=".gff3", delete=False
-            ) as tmp_in:
-                tmp_in.writelines(data_lines)
-                tmp_in_path = tmp_in.name
-            result = subprocess.run(
-                ["bedtools", "sort", "-i", tmp_in_path],
-                capture_output=not debug, text=True, check=True,
+            emit("  sorting (external sort, low memory)…")
+            subprocess.run(
+                ["sort", "-t", "\t", "-k1,1", "-k4,4n",
+                 "-o", str(sorted_tmp), str(data_tmp)],
+                check=True, env={**os.environ, "LC_ALL": "C"},
             )
-            sorted_lines = result.stdout.splitlines(keepends=True)
-            os.unlink(tmp_in_path)
-            print("  Sorted with bedtools.")
+            used = "sort"
         except Exception as e:
-            print(f"  bedtools sort failed ({e}); falling back to Python sort.")
-            bedtools_ok = False
-
-    if not bedtools_ok:
-        def _sort_key(line: str):
+            emit(f"  external sort failed ({e}); trying next option…")
+    if used is None and shutil.which("bedtools"):
+        try:
+            emit("  sorting (bedtools)…")
+            with open(sorted_tmp, "w") as out:
+                subprocess.run(["bedtools", "sort", "-i", str(data_tmp)],
+                               stdout=out, check=True)
+            used = "bedtools"
+        except Exception as e:
+            emit(f"  bedtools failed ({e}); falling back to in-memory sort…")
+    if used is None:
+        emit("  sorting (in-memory Python fallback)…")
+        def _key(line: str):
             parts = line.split("\t")
             try:
                 return (parts[0], int(parts[3]))
             except (IndexError, ValueError):
                 return (parts[0] if parts else "", 0)
-        sorted_lines = sorted(data_lines, key=_sort_key)
-        print("  Sorted with Python fallback.")
+        with open(data_tmp) as dt:
+            lines = dt.readlines()
+        lines.sort(key=_key)
+        with open(sorted_tmp, "w") as st:
+            st.writelines(lines)
+        used = "python"
 
+    # ── Pass 2: stream header + sorted data into the output (gzip-aware) ─────
     out_opener = gzip.open if compressed else open
-    with out_opener(tmp_path, "wt") as fh_out:
+    with out_opener(out_tmp, "wt") as fh_out, open(sorted_tmp) as st:
         fh_out.writelines(header_lines)
-        fh_out.writelines(sorted_lines)
-    tmp_path.replace(gff_path)
+        for line in st:
+            fh_out.write(line)
+    out_tmp.replace(gff_path)
+
+    for t in (data_tmp, sorted_tmp):
+        t.unlink(missing_ok=True)
+    emit(f"  Sorted with {used}.")
 
 
 # ---------------------------------------------------------------------------

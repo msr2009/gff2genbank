@@ -39,27 +39,49 @@ import time
 from pathlib import Path
 
 
-def build(gff_path: Path, db_path: Path, force: bool = False) -> None:
-    """Create a gffutils FeatureDB from a GFF3 file."""
+def _fmt_time(seconds: float) -> str:
+    """Format an elapsed duration as m:ss (e.g. 0:07, 3:42, 125:09)."""
+    m, s = divmod(int(round(seconds)), 60)
+    return f"{m}:{s:02d}"
+
+
+def build(gff_path: Path, db_path: Path, force: bool = False, log=None,
+          total: int | None = None) -> dict:
+    """
+    Create a gffutils FeatureDB from a GFF3 file.
+
+    log:   optional callable(str) sink for progress messages. Defaults to print,
+           so the CLI behaves as before; the setup GUI passes its own callback.
+    total: optional expected feature count (e.g. the prepared GFF's line count)
+           so progress can be reported as a percentage. Returns
+           {"count", "elapsed", "skipped"}.
+    """
     import gffutils
 
-    if db_path.exists() and not force:
-        print(f"Database already exists: {db_path}")
-        print("Use --force to rebuild.")
-        return
+    emit = log if log is not None else (lambda m: print(m, flush=True))
 
-    print(f"Input GFF : {gff_path}")
-    print(f"Output DB : {db_path}")
-    print()
+    if db_path.exists() and not force:
+        emit(f"Database already exists: {db_path} (enable force to rebuild).")
+        return {"count": 0, "elapsed": 0.0, "skipped": True}
+
+    emit(f"Input GFF : {gff_path}")
+    emit(f"Output DB : {db_path}")
 
     counter = [0]
     start_t = time.time()
 
     def progress(f):
         counter[0] += 1
-        if counter[0] % 50_000 == 0:
-            print(f"  {counter[0]:>8,} features  ({time.time() - start_t:.0f}s)",
-                  flush=True)
+        if counter[0] % 100_000 == 0:
+            el = time.time() - start_t
+            rate = counter[0] / max(el, 0.001)
+            if total:
+                pct = min(100.0, 100.0 * counter[0] / total)
+                emit(f"{counter[0]:,} / {total:,} features ({pct:.0f}%) "
+                     f"({_fmt_time(el)}, {rate:,.0f}/s)")
+            else:
+                emit(f"{counter[0]:,} features indexed… "
+                     f"({_fmt_time(el)}, {rate:,.0f}/s)")
         return f
 
     gffutils.create_db(
@@ -76,8 +98,8 @@ def build(gff_path: Path, db_path: Path, force: bool = False) -> None:
     )
 
     elapsed = time.time() - start_t
-    print(f"\nDone — {counter[0]:,} features in {elapsed:.1f}s")
-    print(f"Database: {db_path}")
+    emit(f"Done — {counter[0]:,} features in {_fmt_time(elapsed)}")
+    return {"count": counter[0], "elapsed": elapsed, "skipped": False}
 
 
 def main():
