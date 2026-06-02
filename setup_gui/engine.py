@@ -16,6 +16,8 @@ function already defined and tested in prepare_gff.py.
 
 import gzip
 import sys
+from math import exp, log, log1p
+from random import random, randrange
 from pathlib import Path
 from typing import Callable
 
@@ -34,6 +36,27 @@ StepFn = Callable[[str], None]
 
 def _noop(_msg: str) -> None:
     pass
+
+
+# How many example column-9 attribute strings to capture per (source, featuretype)
+# pair during the scan (shown as a hover tooltip in the Step 2 selector), and the
+# per-example truncation length so a long attribute field can't bloat a tooltip.
+N_EXAMPLES = 3
+_EX_MAXLEN = 160
+_TINY = 5e-324  # smallest positive double — guards log() against a random() of 0.0
+
+
+def _algo_l_state(c: int, w: float) -> list:
+    """Reservoir-sampling (Algorithm L) state [W, next_index].
+
+    Given the current 1-based feature index `c` and a running weight `w`, advance
+    `w` and pick the next feature index at which the reservoir should be replaced.
+    The geometric skip means we do this O(k·log n) times per pair instead of once
+    per line — so the per-line scan cost stays a single integer compare. See
+    https://en.wikipedia.org/wiki/Reservoir_sampling#Optimal:_Algorithm_L"""
+    w = w * exp(log(random() or _TINY) / N_EXAMPLES)
+    gap = int(log(random() or _TINY) / log1p(-w)) + 1
+    return [w, c + gap]
 
 
 # ---------------------------------------------------------------------------
@@ -85,9 +108,11 @@ def scan_pairs(gff_paths: list[Path], step: StepFn = _noop) -> tuple[list[dict],
       - collect the unique chromosome names (column 1) in order of appearance.
 
     Returns (rows, gff_chroms):
-      rows       — list of {"source", "featuretype", "count", "bytes"} sorted by
-                   count desc. `bytes` (summed uncompressed line length) is the
-                   honest predictor of output size.
+      rows       — list of {"source", "featuretype", "count", "bytes",
+                   "examples"} sorted by count desc. `bytes` (summed uncompressed
+                   line length) is the honest predictor of output size;
+                   `examples` holds up to N_EXAMPLES column-9 attribute strings
+                   for a hover tooltip.
       gff_chroms — unique col-1 chromosome names across all inputs.
 
     NOTE: unlike setup/s04_priority_groups.py, we deliberately do NOT exclude
@@ -96,7 +121,10 @@ def scan_pairs(gff_paths: list[Path], step: StepFn = _noop) -> tuple[list[dict],
     them — so every pair is reported and the caller pre-selects structural
     rows rather than hiding them.
     """
-    tally: dict[tuple[str, str], list[int]] = {}  # (source, ftype) -> [count, bytes]
+    # (source, ftype) -> [count, bytes, sampler]. sampler is None while the
+    # examples reservoir is still filling, then [W, next_index] (Algorithm L).
+    tally: dict[tuple[str, str], list] = {}
+    examples: dict[tuple[str, str], list[str]] = {}  # (source, ftype) -> [col9, …]
     chroms: list[str] = []
     chrom_seen: set[str] = set()
 
@@ -119,16 +147,30 @@ def scan_pairs(gff_paths: list[Path], step: StepFn = _noop) -> tuple[list[dict],
                 if seen % 1_000_000 == 0:
                     step(f"  {gff.name}: scanned {seen:,} lines…")
                 key = (parts[1], parts[2])
+                nbytes = len(line.encode("utf-8"))
                 rec = tally.get(key)
                 if rec is None:
-                    tally[key] = [1, len(line.encode("utf-8"))]
+                    # parts[8] is guaranteed present (len(parts) >= 9 above)
+                    tally[key] = [1, nbytes, None]
+                    examples[key] = [parts[8].strip()[:_EX_MAXLEN]]
                 else:
                     rec[0] += 1
-                    rec[1] += len(line.encode("utf-8"))
+                    rec[1] += nbytes
+                    st = rec[2]
+                    if st is None:                  # reservoir still filling
+                        ex = examples[key]
+                        if len(ex) < N_EXAMPLES:
+                            ex.append(parts[8].strip()[:_EX_MAXLEN])
+                        if len(ex) >= N_EXAMPLES:   # just became full → start sampling
+                            rec[2] = _algo_l_state(rec[0], 1.0)
+                    elif rec[0] == st[1]:           # Algorithm L: this is a hit
+                        examples[key][randrange(N_EXAMPLES)] = parts[8].strip()[:_EX_MAXLEN]
+                        rec[2] = _algo_l_state(rec[0], st[0])
 
     rows = [
-        {"source": s, "featuretype": f, "count": c, "bytes": b}
-        for (s, f), (c, b) in tally.items()
+        {"source": s, "featuretype": f, "count": rec[0], "bytes": rec[1],
+         "examples": examples.get((s, f), [])}
+        for (s, f), rec in tally.items()
     ]
     rows.sort(key=lambda r: r["count"], reverse=True)
     step(f"Found {len(rows):,} distinct (source, feature type) pair(s) "

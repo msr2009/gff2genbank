@@ -157,6 +157,9 @@ SETUP_CSS = APP_CSS + """
 .ftgrp .form-check-input { position:absolute; left:4px; top:5px; margin:0; }
 .ftgrp .form-check-label, .ftgrp .checkbox label { width:100%; margin:0; }
 .ft-row { display:flex; gap:10px; align-items:center; width:100%; font-size:0.83em; }
+/* rows with captured examples show a help cursor + dotted name to invite hover */
+.ft-row[title] { cursor:help; }
+.ft-row[title] .ft-name { text-decoration:underline dotted #bbb; text-underline-offset:2px; }
 .ft-name { flex:0 0 46%; color:#34495e; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .ft-cnt  { flex:0 0 20%; text-align:right; font-family:monospace; color:#666; }
 .ft-mb   { flex:0 0 20%; text-align:right; font-family:monospace; color:#666; }

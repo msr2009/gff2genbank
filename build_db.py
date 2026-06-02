@@ -34,6 +34,7 @@ Dependencies:
 """
 
 import argparse
+import logging
 import sys
 import time
 from pathlib import Path
@@ -84,18 +85,49 @@ def build(gff_path: Path, db_path: Path, force: bool = False, log=None,
                      f"({_fmt_time(el)}, {rate:,.0f}/s)")
         return f
 
-    gffutils.create_db(
-        str(gff_path),
-        dbfn=str(db_path),
-        force=force,
-        keep_order=True,
-        merge_strategy="create_unique",
-        transform=progress,
-        # WormBase GFF already has explicit gene and transcript records.
-        # Inference is redundant and slow — disable both.
-        disable_infer_genes=True,
-        disable_infer_transcripts=True,
-    )
+    # Aggressive, rebuild-safe SQLite pragmas. The DB is derived data we can
+    # always regenerate, so we trade durability for speed. The large page cache
+    # is the key one: gffutils' relations-building phase scans the still-unindexed
+    # `relations` table once per feature, so keeping that table resident in RAM
+    # turns those scans from disk I/O into memory sweeps.
+    pragmas = dict(gffutils.constants.default_pragmas)
+    pragmas.update({
+        "synchronous": "OFF",         # no fsync per transaction
+        "journal_mode": "OFF",        # no rollback journal
+        "temp_store": "MEMORY",       # temp b-trees (index builds) in RAM
+        "main.cache_size": -1048576,  # ~1 GiB page cache (negative value = KiB)
+    })
+
+    # gffutils reports its post-feature-reading phases (relations build, index
+    # creation, ANALYZE, commit) only via logger.info on the "gffutils.create"
+    # logger — invisible unless the level is INFO (verbose=True). Forward those
+    # records into our progress sink, time-stamped, so the build is never silent
+    # after the feature %-bar reaches 100%. (verbose=True also makes gffutils
+    # write a per-1000-feature line to stderr — console only, not this sink.)
+    class _EmitHandler(logging.Handler):
+        def emit(self, record):
+            emit(f"[{_fmt_time(time.time() - start_t)}] {record.getMessage()}")
+
+    glog = logging.getLogger("gffutils.create")
+    handler = _EmitHandler()
+    glog.addHandler(handler)
+    try:
+        gffutils.create_db(
+            str(gff_path),
+            dbfn=str(db_path),
+            force=force,
+            keep_order=False,   # app reads attributes by key, never by order
+            merge_strategy="create_unique",
+            transform=progress,
+            pragmas=pragmas,
+            verbose=True,       # raise logger to INFO so the phase logs flow
+            # WormBase GFF already has explicit gene and transcript records.
+            # Inference is redundant and slow — disable both.
+            disable_infer_genes=True,
+            disable_infer_transcripts=True,
+        )
+    finally:
+        glog.removeHandler(handler)
 
     elapsed = time.time() - start_t
     emit(f"Done — {counter[0]:,} features in {_fmt_time(elapsed)}")

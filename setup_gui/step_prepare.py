@@ -243,9 +243,19 @@ def prepare_gff_server(input, output, session, app_session: reactive.Value):
                    reverse=True)
         return order, bysrc
 
+    def _ex_title(r: dict) -> str:
+        """Hover-tooltip text: a few example column-9 attribute strings collected
+        during the scan, so the user can see what a feature type actually is."""
+        ex = r.get("examples") or []
+        return ("Examples (col 9):\n" + "\n".join(f"• {e}" for e in ex)) if ex else ""
+
     def _ft_label(r: dict) -> ui.Tag:
         required = r["featuretype"] in config.ALWAYS_HANDLED
-        return ui.span({"class": "ft-row"},
+        attrs = {"class": "ft-row"}
+        t = _ex_title(r)
+        if t:
+            attrs["title"] = t
+        return ui.span(attrs,
             ui.span(r["featuretype"], {"class": "ft-name"}),
             ui.span(f'{r["count"]:,}', {"class": "ft-cnt"}),
             ui.span(f'{r["bytes"]/1e6:.2f} MB', {"class": "ft-mb"}),
@@ -255,7 +265,11 @@ def prepare_gff_server(input, output, session, app_session: reactive.Value):
     def _req_row(r: dict) -> ui.Tag:
         """A required (ALWAYS_HANDLED) feature type: shown as a checked, DISABLED
         checkbox so it can't be unticked (it's always kept)."""
-        return ui.div({"class": "ft-row req-row"},
+        attrs = {"class": "ft-row req-row"}
+        t = _ex_title(r)
+        if t:
+            attrs["title"] = t
+        return ui.div(attrs,
             ui.tags.input(type="checkbox", checked="checked", disabled="disabled",
                           class_="req-box"),
             ui.span(r["featuretype"], {"class": "ft-name"}),
