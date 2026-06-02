@@ -1,4 +1,4 @@
-# Runtime dependencies for the GFF -> GenBank app.
+# Runtime dependencies for the gff2genbank app.
 # Installed by shinyapps.io on deploy and locally with:
 #   pip install -r requirements.txt
 #

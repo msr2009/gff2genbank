@@ -256,7 +256,7 @@ def run(session: dict) -> dict:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Validate the GFF->GenBank app setup."
+        description="Validate the gff2genbank app setup."
     )
     parser.add_argument("--db",    required=True, help="gffutils database path")
     parser.add_argument("--fasta", required=True, help="Genome FASTA path")

@@ -1,7 +1,7 @@
 """
 setup.py
 --------
-Top-level orchestrator for the GFF->GenBank app setup pipeline.
+Top-level orchestrator for the gff2genbank app setup pipeline.
 
 Runs the following steps in order, with the ability to skip completed
 steps or jump directly to any individual step:
@@ -155,7 +155,7 @@ def main_menu(data_dir: Path, start_step: str | None = None) -> None:
     while True:
         try:
             print("\n" + "=" * 60)
-            print("GFF->GenBank APP — SETUP")
+            print("gff2genbank APP — SETUP")
             print("=" * 60)
             _print_status(data_dir)
             print("  Options:")
@@ -206,7 +206,7 @@ def main_menu(data_dir: Path, start_step: str | None = None) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="GFF->GenBank app setup orchestrator.",
+        description="gff2genbank app setup orchestrator.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )

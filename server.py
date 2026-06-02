@@ -1,5 +1,5 @@
 """
-server.py — Shiny server function for the GFF -> GenBank app.
+server.py — Shiny server function for the gff2genbank app.
 
 Key fixes in this version:
   - avail_fts now includes transcript types (ncRNA, piRNA, etc.) as well as

@@ -612,7 +612,7 @@ def _run_interactive(db_path: Path, out_path: Path) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Configure priority feature groups for the GFF->GenBank app.",
+        description="Configure priority feature groups for the gff2genbank app.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )

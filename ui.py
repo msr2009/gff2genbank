@@ -1,5 +1,5 @@
 """
-ui.py — Shiny UI layout for the GFF -> GenBank app.
+ui.py — Shiny UI layout for the gff2genbank app.
 """
 
 from shiny import ui

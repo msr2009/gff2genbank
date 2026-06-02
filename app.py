@@ -1,7 +1,7 @@
 """
 app.py
 ------
-Entry point for the GFF -> GenBank app.
+Entry point for the gff2genbank app.
 
 This file is intentionally minimal — all logic lives in the other modules:
   config.py     — paths, colours, defaults

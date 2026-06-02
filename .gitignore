@@ -1,0 +1,75 @@
+# --- Data files (kept local, not synced to GitHub) ---------------------------
+# The data/ directory holds the prepared gffutils DB, the genome FASTA, and
+# its index. These are large binaries and are produced by the setup pipeline,
+# not source-controlled.
+data/
+
+# Loose annotation/sequence files anywhere in the tree
+*.db
+*.gff
+*.gff3
+*.gff3.gz
+*.gtf
+*.gtf.gz
+*.fa
+*.fasta
+*.fa.fai
+*.fasta.fai
+*.fna
+*.vcf
+*.vcf.gz
+*.vcf.gz.tbi
+*.bam
+*.bai
+*.bed
+*.bed.gz
+*.bw
+*.bigwig
+
+# --- Python ------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual envs
+venv/
+.venv/
+env/
+ENV/
+
+# --- Editor / OS noise -------------------------------------------------------
+.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.ipynb_checkpoints/
+
+# --- rsconnect / shinyapps.io ------------------------------------------------
+rsconnect-python/
+*.tar.gz
+
+# --- Logs / scratch ----------------------------------------------------------
+setup_log.json
+*.log
+chrom_map.txt
+chrom_map_template.tsv
+chr_map.txt

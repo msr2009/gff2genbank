@@ -1,4 +1,4 @@
-# GFF → GenBank Annotator
+# gff2genbank
 
 A Shiny for Python web app for browsing genomic annotations and exporting
 user-defined regions as annotated GenBank files.  Developed for *C. elegans*

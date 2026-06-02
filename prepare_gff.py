@@ -1,7 +1,7 @@
 """
 prepare_gff.py
 --------------
-Prepare one or more GFF3 files for use with the GFF->GenBank app.
+Prepare one or more GFF3 files for use with the gff2genbank app.
 
 This script:
   1. Validates each input file (not binary/archive, correct format).
@@ -604,7 +604,7 @@ def _cleanup_temps(paths: list[Path]) -> None:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Prepare GFF3/GTF file(s) for the GFF->GenBank app.",
+        description="Prepare GFF3/GTF file(s) for the gff2genbank app.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
