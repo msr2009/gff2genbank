@@ -41,6 +41,7 @@ def validate_ui() -> ui.Tag:
                                    class_="btn btn-primary"),
             ui.output_ui("val_summary"),
             log_box_ui("val_logbox"),
+            ui.output_ui("update_config_panel"),
         ),
         ui.output_ui("val_table"),
     )
@@ -48,10 +49,11 @@ def validate_ui() -> ui.Tag:
 
 @module.server
 def validate_server(input, output, session, app_session: reactive.Value):
-    results   = reactive.Value(None)    # list[dict] | None
-    running   = reactive.Value(False)
-    val_error = reactive.Value("")
-    val_log   = reactive.Value([])
+    results        = reactive.Value(None)    # list[dict] | None
+    running        = reactive.Value(False)
+    val_error      = reactive.Value("")
+    val_log        = reactive.Value([])
+    config_status  = reactive.Value("")      # "" | "ok" | error message
     _val_msgs: list[str] = []
 
     bind_busy_button("revalidate", running, "Re-validate", "Validating…")
@@ -140,6 +142,42 @@ def validate_server(input, output, session, app_session: reactive.Value):
         if n_warn:
             msg += f"  ({n_warn} warning(s).)"
         return ui.div(msg, {"class": "fb-chosen"})
+
+    @reactive.effect
+    @reactive.event(input.update_config)
+    def _do_update_config():
+        config_status.set("")
+        try:
+            engine.update_config_paths(
+                Path(res_fa()),
+                Path(res_db()),
+                Path(res_pg()),
+            )
+            config_status.set("ok")
+        except Exception as exc:
+            config_status.set(str(exc))
+
+    @render.ui
+    def update_config_panel():
+        rows = results()
+        if not rows or any(not r["ok"] for r in rows):
+            return ui.div()
+        st = config_status()
+        parts = [
+            ui.input_action_button(
+                "update_config", "Update config.py",
+                class_="btn btn-secondary",
+                style="margin-top: 0.75rem;",
+            ),
+            ui.p("Write the current FASTA, database, and priority-groups paths "
+                 "into config.py so the browser app uses them by default.",
+                 {"class": "upload-note", "style": "margin-top: 0.25rem;"}),
+        ]
+        if st == "ok":
+            parts.append(ui.div("config.py updated.", {"class": "fb-chosen"}))
+        elif st:
+            parts.append(ui.div(f"Error: {st}", {"class": "fb-error"}))
+        return ui.div(*parts)
 
     @render.ui
     def val_logbox():
