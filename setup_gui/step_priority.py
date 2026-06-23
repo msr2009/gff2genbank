@@ -241,13 +241,16 @@ def priority_server(input, output, session, app_session: reactive.Value):
                 ui.input_action_button("unassign_btn", "Unassign",
                                        class_="btn btn-sm btn-outline-secondary"),
             ),
-            ui.div({"class": "pc-head"},
-                ui.span("source", {"class": "pc-src"}),
-                ui.span("feature type", {"class": "pc-ft"}),
-                ui.span("count", {"class": "pc-cnt"}),
-                ui.span("assigned to", {"class": "pa-assign"}),
-            ),
             ui.div({"class": "pc-table"},
+                # Header lives inside the scroll container so header and rows share
+                # the same width — the scrollbar therefore subtracts from both equally
+                # and the columns stay aligned.  `sticky` pins it while scrolling.
+                ui.div({"class": "pc-head"},
+                    ui.span("source", {"class": "pc-src"}),
+                    ui.span("feature type", {"class": "pc-ft"}),
+                    ui.span("count", {"class": "pc-cnt"}),
+                    ui.span("assigned to", {"class": "pa-assign"}),
+                ),
                 # `.ftgrp` parks the checkbox in a gutter so it can't be clipped
                 # by the flex row label (reused from the Step 2 feature table).
                 ui.div({"class": "ftgrp"},
@@ -330,8 +333,11 @@ def priority_server(input, output, session, app_session: reactive.Value):
         rows.set(engine.pg_insert_for_group(rows(), g, [(g, src, ft, "include")]))
 
     # ── Zone C: groups panel ────────────────────────────────────────────────
-    def _gbtn(label, payload: dict, cls="prio-gbtn"):
-        onclick = (f"Shiny.setInputValue({json.dumps(group_action_id)}, "
+    def _gbtn(label, payload: dict, cls="prio-gbtn", confirm_msg: str = ""):
+        guard = (f"if(!confirm({json.dumps(confirm_msg)})) return false; "
+                 if confirm_msg else "")
+        onclick = (f"{guard}"
+                   f"Shiny.setInputValue({json.dumps(group_action_id)}, "
                    f"{json.dumps(json.dumps(payload))}, {{priority:'event'}}); "
                    f"return false;")
         return ui.tags.button(label, {"onclick": onclick, "type": "button", "class": cls})
@@ -388,8 +394,17 @@ def priority_server(input, output, session, app_session: reactive.Value):
                           cls="prio-x"),
                   ) for (_, s, f, _st) in excludes])]
 
+        clear_btn = _gbtn(
+            "Clear all",
+            {"verb": "clear_all"},
+            cls="prio-gbtn prio-del",
+            confirm_msg="Clear all groups and exclusions?",
+        )
         return ui.div({"class": "card"},
-            ui.tags.h5("Groups (top = highest priority)"),
+            ui.div({"class": "prio-ghead"},
+                ui.tags.h5("Groups (top = highest priority)", {"style": "margin:0"}),
+                clear_btn,
+            ),
             *blocks, *excl_block)
 
     @reactive.effect
@@ -425,6 +440,9 @@ def priority_server(input, output, session, app_session: reactive.Value):
             s, f = a.get("source"), a.get("feat")
             rows.set([r for r in current
                       if not (r[1] == s and r[2] == f and r[3] == "exclude")])
+        elif verb == "clear_all":
+            rows.set([])
+            rename_target.set(None)
 
     @reactive.effect
     @reactive.event(input.rename_apply)

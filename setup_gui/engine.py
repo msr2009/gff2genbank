@@ -360,25 +360,37 @@ def build_database(
 
 def scan_db_pairs(db_path: Path, step: StepFn = _noop) -> list[tuple[str, str, int]]:
     """All (source, featuretype, count) pairs in the DB (blank source/featuretype
-    rows excluded), sorted alphabetically by (source, feature type)."""
+    rows excluded), sorted alphabetically by (source, feature type).
+
+    Streams rows from SQLite one at a time and reports progress every 250 k
+    features — same pattern as scan_pairs (Step 2) — so the log box updates
+    live rather than blocking until the GROUP BY finishes.
+    """
+    import time
     import gffutils
     step(f"Scanning {Path(db_path).name} for (source, feature type) pairs…")
-    step("  (this may take a moment on large databases — running GROUP BY query…)")
+    t0 = time.monotonic()
     db = gffutils.FeatureDB(str(db_path))
-    cur = db.conn.execute(
-        "SELECT source, featuretype, COUNT(*) "
-        "FROM features "
-        "GROUP BY source, featuretype "
-        "ORDER BY COUNT(*) DESC"
+    cur = db.conn.execute("SELECT source, featuretype FROM features")
+    counts: dict[tuple[str, str], int] = {}
+    seen = 0
+    for row in cur:
+        src, ft = row[0], row[1]
+        if src in ("", ".") or ft in ("", "."):
+            continue
+        key = (src, ft)
+        counts[key] = counts.get(key, 0) + 1
+        seen += 1
+        if seen % 250_000 == 0:
+            step(f"  scanned {seen:,} features…")
+    pairs = sorted(
+        [(src, ft, cnt) for (src, ft), cnt in counts.items()],
+        key=lambda p: (p[0].lower(), p[1].lower()),
     )
-    pairs = [
-        (row[0], row[1], row[2])
-        for row in cur.fetchall()
-        if row[0] not in ("", ".") and row[1] not in ("", ".")
-    ]
-    pairs = sorted(pairs, key=lambda p: (p[0].lower(), p[1].lower()))
     n_src = len({p[0] for p in pairs})
-    step(f"Found {len(pairs):,} pair(s) across {n_src} source(s).")
+    elapsed = time.monotonic() - t0
+    step(f"Found {len(pairs):,} pair(s) across {n_src} source(s) "
+         f"— {seen:,} features in {elapsed:.1f}s.")
     return pairs
 
 

@@ -80,19 +80,21 @@ SETUP_CSS = APP_CSS + """
     display:flex; gap:8px; padding:2px 10px 4px 34px;
     font-size:0.74em; text-transform:uppercase; letter-spacing:0.04em;
     color:#9aa; border-bottom:1px solid #e2e2e2;
+    position:sticky; top:0; background:#fff; z-index:1;
 }
 .pc-table { max-height:340px; overflow-y:auto; margin-top:2px; }
 /* The pairs checkbox group reuses the Step 2 `.ftgrp` layout (checkbox parked
    in a 34px gutter, label = full-width flex row) so the box can't be clipped by
    the flex row — same fix that was applied to the prepare feature table. See
    the `.ftgrp` rules below; the 34px left padding above keeps the header aligned. */
+/* Column widths: 30+28+13+22 = 93%; leaves ~7% slack for 3× gap:8px. */
 .pc-row { display:flex; gap:8px; align-items:center; width:100%; font-size:0.84em; }
-.pc-src { flex:0 0 32%; color:#34495e; font-weight:600;
+.pc-src { flex:0 0 30%; color:#34495e; font-weight:600;
           overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.pc-ft  { flex:0 0 30%; color:#2c3e50;
+.pc-ft  { flex:0 0 28%; color:#2c3e50;
           overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.pc-cnt { flex:0 0 14%; text-align:right; font-family:monospace; color:#555; }
-.pc-mb  { flex:0 0 14%; text-align:right; font-family:monospace; color:#555; }
+.pc-cnt { flex:0 0 13%; text-align:right; font-family:monospace; color:#555; }
+.pc-mb  { flex:0 0 13%; text-align:right; font-family:monospace; color:#555; }
 .pc-req { flex:0 0 auto; font-size:0.85em; color:#1a8a4a; font-style:italic; }
 /* ── Step 1 dependency rows ─────────────────────────────────────────────── */
 .dep-row { display:flex; align-items:center; gap:8px; padding:2px 0; font-size:0.86em; }
@@ -162,8 +164,15 @@ SETUP_CSS = APP_CSS + """
 .ftgrp .shiny-input-checkboxgroup, .ftgrp .form-group { margin:0; }
 .ftgrp .form-check, .ftgrp .checkbox { margin:0; padding:1px 0 1px 24px; min-height:0;
                                        position:relative; }
+/* Park the checkbox in the gutter.  Shiny 1.6.x emits legacy .checkbox markup
+   (no .form-check-input class) even with Bootstrap 5, so target both forms. */
+.ftgrp .checkbox label input[type="checkbox"],
 .ftgrp .form-check-input { position:absolute; left:4px; top:5px; margin:0; }
 .ftgrp .form-check-label, .ftgrp .checkbox label { width:100%; margin:0; }
+/* The label wraps a leading whitespace text node + a <span>.  Make the span a
+   block so the flex row fills the full gutter-padded label width and the
+   whitespace text node doesn't contribute inline width. */
+.ftgrp .checkbox label > span { display:block; width:100%; }
 .ft-row { display:flex; gap:10px; align-items:center; width:100%; font-size:0.83em; }
 /* rows with captured examples show a help cursor + dotted name to invite hover */
 .ft-row[title] { cursor:help; }
