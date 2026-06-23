@@ -83,6 +83,9 @@ def priority_server(input, output, session, app_session: reactive.Value):
     # Plain buffer the background scan appends to; the poll effect mirrors it
     # into scan_log for display (same pattern as Steps 2 & 3).
     _scan_msgs: list[str] = []
+    # Tracks last-seen sel_all_{sid} values so the sync effect can detect
+    # actual user toggles vs. the False that appears on every re-render.
+    _sel_all_prev: dict = {}
 
     bind_busy_button("scan_db_btn", scan_running, "Scan database", "Scanning…")
 
@@ -153,8 +156,34 @@ def priority_server(input, output, session, app_session: reactive.Value):
             return
         scan_running.set(False)
         res = scan_task.result()
+        _sel_all_prev.clear()
         pairs.set(res["pairs"])
         rows.set(res["rows"])
+
+    @reactive.effect
+    def _sync_sel_all():
+        """When a parent select-all checkbox toggles, select/deselect all children
+        in that section.  Uses _sel_all_prev to distinguish real user toggles from
+        the False value that appears on every pairs_card re-render."""
+        ps = pairs()
+        if not ps:
+            return
+        order, bysrc = _pair_sources(ps)
+        for sid, src in enumerate(order):
+            try:
+                v = input[f"sel_all_{sid}"]()
+            except Exception:
+                continue
+            if v is None:
+                continue
+            prev_v = _sel_all_prev.get(sid)
+            if prev_v is None:
+                _sel_all_prev[sid] = v          # first render — record, don't update
+            elif v != prev_v:
+                _sel_all_prev[sid] = v
+                all_idx = [str(gi) for gi, _ in bysrc[src]]
+                ui.update_checkbox_group(f"sel_pairs_{sid}",
+                                         selected=all_idx if v else [])
 
     @render.text
     def prio_error():
@@ -174,12 +203,33 @@ def priority_server(input, output, session, app_session: reactive.Value):
         return ui.div(msg, {"class": "fb-chosen"}) if msg else ui.div()
 
     # ── helpers ─────────────────────────────────────────────────────────────
+    def _pair_sources(ps):
+        """Group pairs by source for the hierarchical table.
+        Returns (order, bysrc) where order is sources by total count desc and
+        bysrc[src] = [(global_idx, (src, ft, cnt)), …].  global_idx is the index
+        into ps, used as the checkbox value so selection maps back regardless of
+        which section contains the row."""
+        order: list[str] = []
+        bysrc: dict[str, list] = {}
+        for gi, (s, f, c) in enumerate(ps):
+            if s not in bysrc:
+                bysrc[s] = []
+                order.append(s)
+            bysrc[s].append((gi, (s, f, c)))
+        order.sort(key=lambda s: sum(cc for _, (_, _, cc) in bysrc[s]), reverse=True)
+        return order, bysrc
+
     def _selected() -> set[tuple[str, str]]:
         ps = pairs() or []
-        try:
-            idx = set(input.sel_pairs() or [])
-        except Exception:
-            idx = set()
+        order, _ = _pair_sources(ps)
+        idx: set[str] = set()
+        for sid in range(len(order)):
+            try:
+                v = input[f"sel_pairs_{sid}"]()
+            except Exception:
+                v = None
+            if v:
+                idx.update(v)
         return {(ps[int(i)][0], ps[int(i)][1]) for i in idx
                 if i.isdigit() and int(i) < len(ps)}
 
@@ -205,11 +255,10 @@ def priority_server(input, output, session, app_session: reactive.Value):
             assign, cls = grp, "pa-grp"
         else:
             assign, cls = "—", "pa-none"
-        return ui.span({"class": "pc-row"},
-            ui.span(src, {"class": "pc-src"}),
-            ui.span(ft, {"class": "pc-ft"}),
-            ui.span(f"{cnt:,}", {"class": "pc-cnt"}),
-            ui.span(assign, {"class": f"pa-assign {cls}"}),
+        return ui.span({"class": "ft-item"},
+            f"{ft}",
+            ui.span(f"{cnt:,} · ", {"class": "ft-meta"}),
+            ui.span(assign, {"class": cls}),
         )
 
     @render.ui
@@ -223,9 +272,31 @@ def priority_server(input, output, session, app_session: reactive.Value):
                 ui.p("No assignable pairs (only structural feature types present).",
                      {"class": "upload-note"}))
         current = rows()
-        choices = {str(i): _pair_label(s, f, c, current)
-                   for i, (s, f, c) in enumerate(ps)}
         groups = engine.pg_group_order(current)
+        # Build one collapsible src-section per source, each with its own
+        # checkbox group keyed by global pair index.  This reuses the Prepare
+        # table's proven .src-section / .ft-head / .ftgrp architecture so
+        # columns align correctly.
+        order, bysrc = _pair_sources(ps)
+        sections = []
+        for sid, src in enumerate(order):
+            items = bysrc[src]
+            tot_c = sum(c for _, (_, _, c) in items)
+            choices = {str(gi): _pair_label(s, f, c, current)
+                       for gi, (s, f, c) in items}
+            sections.append(ui.div({"class": "src-section"},
+                ui.div({"class": "src-head",
+                        "onclick": "this.closest('.src-section').classList.toggle('open')"},
+                    ui.span({"class": "src-radio", "onclick": "event.stopPropagation()"},
+                        ui.input_checkbox(f"sel_all_{sid}", None, value=False)),
+                    ui.span(src, {"class": "src-name"}),
+                    ui.span(f"{tot_c:,} feat · {len(items)} types",
+                            {"class": "src-meta"}),
+                ),
+                ui.div({"class": "ftgrp"},
+                    ui.input_checkbox_group(f"sel_pairs_{sid}", None, choices=choices),
+                ),
+            ))
         return ui.div({"class": "card"},
             ui.tags.h5("Assign pairs to groups"),
             # action bar
@@ -241,22 +312,7 @@ def priority_server(input, output, session, app_session: reactive.Value):
                 ui.input_action_button("unassign_btn", "Unassign",
                                        class_="btn btn-sm btn-outline-secondary"),
             ),
-            ui.div({"class": "pc-table"},
-                # Header lives inside the scroll container so header and rows share
-                # the same width — the scrollbar therefore subtracts from both equally
-                # and the columns stay aligned.  `sticky` pins it while scrolling.
-                ui.div({"class": "pc-head"},
-                    ui.span("source", {"class": "pc-src"}),
-                    ui.span("feature type", {"class": "pc-ft"}),
-                    ui.span("count", {"class": "pc-cnt"}),
-                    ui.span("assigned to", {"class": "pa-assign"}),
-                ),
-                # `.ftgrp` parks the checkbox in a gutter so it can't be clipped
-                # by the flex row label (reused from the Step 2 feature table).
-                ui.div({"class": "ftgrp"},
-                    ui.input_checkbox_group("sel_pairs", None, choices=choices),
-                ),
-            ),
+            *sections,
             # Zone B: wildcard / advanced rule
             ui.tags.details({"class": "prio-adv"},
                 ui.tags.summary("Add a wildcard rule (advanced)"),

@@ -294,14 +294,14 @@ def prepare_gff_server(input, output, session, app_session: reactive.Value):
         return ("Examples (col 9):\n" + "\n".join(f"• {e}" for e in ex)) if ex else ""
 
     def _ft_label(r: dict) -> ui.Tag:
-        attrs = {"class": "ft-row"}
+        attrs = {"class": "ft-item"}
         t = _ex_title(r)
         if t:
             attrs["title"] = t
         return ui.span(attrs,
-            ui.span(r["featuretype"], {"class": "ft-name"}),
-            ui.span(f'{r["count"]:,}', {"class": "ft-cnt"}),
-            ui.span(f'{r["bytes"]/1e6:.2f} MB', {"class": "ft-mb"}),
+            f"{r['featuretype']}",
+            ui.span(f"{r['count']:,} · {r['bytes']/1e6:.2f} MB",
+                    {"class": "ft-meta"}),
         )
 
     def _get(name, default):
@@ -356,9 +356,12 @@ def prepare_gff_server(input, output, session, app_session: reactive.Value):
         kmb = sum(r["bytes"] for r in kept) / 1e6
         tc = sum(r["count"] for r in stats)
         tmb = sum(r["bytes"] for r in stats) / 1e6
+        # gffutils SQLite DBs run ~2.25× the uncompressed GFF size (empirical: c_elegans subsets at 50k/200k/600k features)
+        db_mb = kmb * 2.25
         return (f"Keeping {kc:,} of {tc:,} features   •   "
                 f"~{kmb:.1f} of {tmb:.1f} MB   "
-                f"({len(kept)} of {len(stats)} type pairs)")
+                f"({len(kept)} of {len(stats)} type pairs)   •   "
+                f"estimated database size: ~{db_mb:.0f} MB")
 
     @render.ui
     def filter_card():
@@ -375,9 +378,9 @@ def prepare_gff_server(input, output, session, app_session: reactive.Value):
         if sort_mode == "name":
             disp = sorted(disp, key=lambda t: t[1].lower())
 
-        st = sel_state() or {"modes": {}, "keep": {}}
         sections = []
-        with reactive.isolate():                # insulate from transient widget values
+        with reactive.isolate():                # insulate from transient widget values and sel_state
+            st = sel_state() or {"modes": {}, "keep": {}}
             for sid, src in disp:
                 items = bysrc[src]
                 if sort_mode == "name":
@@ -398,10 +401,6 @@ def prepare_gff_server(input, output, session, app_session: reactive.Value):
                 ]
 
                 body = [
-                    ui.div({"class": "ft-head"},
-                        ui.span("feature type", {"class": "ft-name"}),
-                        ui.span("count", {"class": "ft-cnt"}),
-                        ui.span("size", {"class": "ft-mb"})),
                     ui.div({"class": "ftgrp"},
                         ui.input_checkbox_group(f"keep_{sid}", None,
                                                 choices=choices, selected=cur_sel)),

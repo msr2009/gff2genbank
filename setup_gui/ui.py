@@ -75,27 +75,6 @@ SETUP_CSS = APP_CSS + """
     font-family: monospace; font-size:0.9em; color:#2c3e50; font-weight:600;
     margin-top:8px; padding:6px 8px; background:#f4f8fb; border-radius:5px;
 }
-/* ── (source, featuretype) keep-table built from a checkbox group ───────── */
-.pc-head {
-    display:flex; gap:8px; padding:2px 10px 4px 34px;
-    font-size:0.74em; text-transform:uppercase; letter-spacing:0.04em;
-    color:#9aa; border-bottom:1px solid #e2e2e2;
-    position:sticky; top:0; background:#fff; z-index:1;
-}
-.pc-table { max-height:340px; overflow-y:auto; margin-top:2px; }
-/* The pairs checkbox group reuses the Step 2 `.ftgrp` layout (checkbox parked
-   in a 34px gutter, label = full-width flex row) so the box can't be clipped by
-   the flex row — same fix that was applied to the prepare feature table. See
-   the `.ftgrp` rules below; the 34px left padding above keeps the header aligned. */
-/* Column widths: 30+28+13+22 = 93%; leaves ~7% slack for 3× gap:8px. */
-.pc-row { display:flex; gap:8px; align-items:center; width:100%; font-size:0.84em; }
-.pc-src { flex:0 0 30%; color:#34495e; font-weight:600;
-          overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.pc-ft  { flex:0 0 28%; color:#2c3e50;
-          overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.pc-cnt { flex:0 0 13%; text-align:right; font-family:monospace; color:#555; }
-.pc-mb  { flex:0 0 13%; text-align:right; font-family:monospace; color:#555; }
-.pc-req { flex:0 0 auto; font-size:0.85em; color:#1a8a4a; font-style:italic; }
 /* ── Step 1 dependency rows ─────────────────────────────────────────────── */
 .dep-row { display:flex; align-items:center; gap:8px; padding:2px 0; font-size:0.86em; }
 .dep-icon { flex:0 0 1.3em; text-align:center; font-weight:700; }
@@ -157,29 +136,24 @@ SETUP_CSS = APP_CSS + """
 .src-btn { font-size:0.72em; padding:1px 7px; border:1px solid #ccc; border-radius:4px;
            background:#fff; cursor:pointer; color:#444; }
 .src-btn:hover { background:#e8f0fe; border-color:#4a90d9; }
-.ft-head { display:flex; gap:10px; padding:2px 10px 2px 34px; font-size:0.72em;
-           text-transform:uppercase; letter-spacing:0.03em; color:#aab;
-           border-top:1px solid #f0f0f0; }
-.ftgrp { padding:2px 10px 6px; }
+.ftgrp { padding:2px 10px 6px; margin-left:28px; font-size:0.84em; }
 .ftgrp .shiny-input-checkboxgroup, .ftgrp .form-group { margin:0; }
-.ftgrp .form-check, .ftgrp .checkbox { margin:0; padding:1px 0 1px 24px; min-height:0;
-                                       position:relative; }
-/* Park the checkbox in the gutter.  Shiny 1.6.x emits legacy .checkbox markup
-   (no .form-check-input class) even with Bootstrap 5, so target both forms. */
-.ftgrp .checkbox label input[type="checkbox"],
-.ftgrp .form-check-input { position:absolute; left:4px; top:5px; margin:0; }
-.ftgrp .form-check-label, .ftgrp .checkbox label { width:100%; margin:0; }
-/* The label wraps a leading whitespace text node + a <span>.  Make the span a
-   block so the flex row fills the full gutter-padded label width and the
-   whitespace text node doesn't contribute inline width. */
-.ftgrp .checkbox label > span { display:block; width:100%; }
-.ft-row { display:flex; gap:10px; align-items:center; width:100%; font-size:0.83em; }
-/* rows with captured examples show a help cursor + dotted name to invite hover */
-.ft-row[title] { cursor:help; }
-.ft-row[title] .ft-name { text-decoration:underline dotted #bbb; text-underline-offset:2px; }
-.ft-name { flex:0 0 46%; color:#34495e; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.ft-cnt  { flex:0 0 20%; text-align:right; font-family:monospace; color:#666; }
-.ft-mb   { flex:0 0 20%; text-align:right; font-family:monospace; color:#666; }
+/* Flex layout: natural checkbox size, gap controls space to label.
+   Bootstrap 5 uses float+negative-margin; override for both markup forms. */
+.ftgrp .form-check { display:flex; align-items:center; gap:10px;
+                     margin:0; padding:2px 0; min-height:0; }
+.ftgrp .form-check-input { float:none; position:static; margin:0; flex-shrink:0; }
+.ftgrp .form-check-label { margin:0; }
+.ftgrp .checkbox { margin:0; padding:2px 0; min-height:0; }
+.ftgrp .checkbox label { display:flex; align-items:center; gap:10px;
+                         margin:0; padding:0; cursor:pointer; }
+.ftgrp .checkbox label input[type="checkbox"] { position:static; margin:0; flex-shrink:0; }
+.ft-item { color:#34495e; }
+/* rows with examples show a help cursor + dotted name */
+.ft-item[title] { cursor:help; }
+.ft-item[title] > :first-child { text-decoration:underline dotted #bbb; text-underline-offset:2px; }
+.ft-meta { margin-left:4ch; color:#888; font-family:monospace; font-size:0.95em; white-space:nowrap; }
+.pa-grp, .pa-excl, .pa-none { white-space:nowrap; }
 /* scrollable log lines (container is a stable output → scroll is preserved).
    Shiny's output_ui container defaults to display:contents (no box), which
    ignores max-height/overflow — force a real block box so it caps + scrolls. */
@@ -192,8 +166,8 @@ SETUP_CSS = APP_CSS + """
 .src-radio .radio-inline, .src-radio .form-check-inline { margin-right:8px; }
 .src-radio label { font-size:0.78em; margin:0; }
 /* collapse via .open class (not <details>, so the radio stays clickable) */
-.src-section > .ft-head, .src-section > .ftgrp { display:none; }
-.src-section.open > .ft-head, .src-section.open > .ftgrp { display:block; }
+.src-section > .ftgrp { display:none; }
+.src-section.open > .ftgrp { display:block; }
 """
 
 
