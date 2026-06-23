@@ -523,83 +523,79 @@ def build_preview(
         y -= (max_row + 1) * PACKED_ROW_GAP
 
     # ------------------------------------------------------------------
-    # Variant tracks
+    # Variant tracks — one band per priority group so groups never share rows
     # ------------------------------------------------------------------
-    all_point = []
-    all_span  = []
+    view_bp      = max(view_end - view_start, 1)
+    chars_per_bp = 800 / (7 * view_bp)
+    bar_h        = BLOCK_H * 0.65
 
+    first_group = True
     for group_name, visible in variant_group_visibility.items():
         if not visible:
             continue
         color = _color(group_name, color_map)
+        grp_point = []
+        grp_span  = []
         for v in variants_by_group.get(group_name, []):
             entry = {**v, "color": color}
             if v["is_point_mutation"]:
-                all_point.append(entry)
+                grp_point.append(entry)
             else:
-                all_span.append(entry)
+                grp_span.append(entry)
 
-    var_top = y - PACKED_ROW_GAP * 0.5
+        if not grp_point and not grp_span:
+            continue
 
-    if all_point:
-        # chars_per_bp: at ~800px wide, 1 char ≈ 7px; scale by view width in bp.
-        # This gives a reasonable label-footprint estimate without knowing the
-        # actual rendered pixel width.
-        view_bp      = max(view_end - view_start, 1)
-        chars_per_bp = 800 / (7 * view_bp)
-        pm_rows = _pack_point_mutations(all_point, strand_mode, chars_per_bp)
-        for v, row in zip(all_point, pm_rows):
-            y_mid = var_top - row * VAR_ROW_GAP
-            sub   = v.get("substitution", "")
-            hover = (
-                f"<b>{v['name']}</b> ({v['group']})<br>"
-                f"Type: {v['var_type']}<br>"
-                f"Pos: {v['pos']:,}"
-                + (f"<br>{sub}" if sub else "")
-            )
-            fig.add_trace(go.Scatter(
-                x=[v["pos"]], y=[y_mid],
-                mode="markers+text",
-                marker=dict(symbol="diamond", size=8, color=v["color"],
-                            line=dict(color="white", width=0.5)),
-                text=[v["name"]],
-                textposition="middle right",
-                textfont=dict(size=VAR_LABEL_SIZE, color="#333"),
-                hovertext=hover, hoverinfo="text",
-                hoverlabel=dict(
-                    bgcolor="#f0f0f0",
-                    font=dict(color="#333333", size=11),
-                    bordercolor="#cccccc",
-                ),
-                showlegend=False,
-            ))
-        y = var_top - (max(pm_rows) + 1) * VAR_ROW_GAP
+        # Small gap before the first group; tighter between groups
+        y -= PACKED_ROW_GAP * (0.5 if first_group else 0.25)
+        first_group = False
 
-    if all_span:
-        span_top     = y - VAR_ROW_GAP * 0.4
-        bar_h        = BLOCK_H * 0.65
-        view_bp      = max(view_end - view_start, 1)
-        chars_per_bp = 800 / (7 * view_bp)
-        span_rows    = _pack_span_variants(all_span, strand_mode, chars_per_bp)
-        for v, row in zip(all_span, span_rows):
-            y_mid = span_top - row * VAR_ROW_GAP
-            color = v["color"]
-            _rect(shapes, v["pos"], v["end"], y_mid, bar_h, color, opacity=0.75)
-            _tips(fig, v["pos"], v["end"], y_mid,
-                  f"<b>{v['name']}</b> ({v['group']})<br>"
-                  f"{v['var_type']} {v['pos']:,}-{v['end']:,}")
-            # On + strand: label at v["end"] (right edge), anchor left → extends right.
-            # On - strand: axis is flipped, v["pos"] is the visually-left edge,
-            #              anchor left so label extends rightward from that edge.
-            span_label_x      = v["pos"] if strand_mode == "-" else v["end"]
-            span_label_anchor = "left"
-            fig.add_annotation(
-                x=span_label_x, y=y_mid,
-                text=v["name"], showarrow=False,
-                xanchor=span_label_anchor, yanchor="middle",
-                font=dict(size=VAR_LABEL_SIZE, color="#333"),
-            )
-        y = span_top - (max(span_rows) + 1) * VAR_ROW_GAP
+        if grp_point:
+            pm_rows = _pack_point_mutations(grp_point, strand_mode, chars_per_bp)
+            for v, row in zip(grp_point, pm_rows):
+                y_mid = y - row * VAR_ROW_GAP
+                sub   = v.get("substitution", "")
+                hover = (
+                    f"<b>{v['name']}</b> ({v['group']})<br>"
+                    f"Type: {v['var_type']}<br>"
+                    f"Pos: {v['pos']:,}"
+                    + (f"<br>{sub}" if sub else "")
+                )
+                fig.add_trace(go.Scatter(
+                    x=[v["pos"]], y=[y_mid],
+                    mode="markers+text",
+                    marker=dict(symbol="diamond", size=8, color=v["color"],
+                                line=dict(color="white", width=0.5)),
+                    text=[v["name"]],
+                    textposition="middle right",
+                    textfont=dict(size=VAR_LABEL_SIZE, color="#333"),
+                    hovertext=hover, hoverinfo="text",
+                    hoverlabel=dict(
+                        bgcolor="#f0f0f0",
+                        font=dict(color="#333333", size=11),
+                        bordercolor="#cccccc",
+                    ),
+                    showlegend=False,
+                ))
+            y -= (max(pm_rows) + 1) * VAR_ROW_GAP
+
+        if grp_span:
+            y -= VAR_ROW_GAP * 0.4
+            span_rows = _pack_span_variants(grp_span, strand_mode, chars_per_bp)
+            for v, row in zip(grp_span, span_rows):
+                y_mid = y - row * VAR_ROW_GAP
+                _rect(shapes, v["pos"], v["end"], y_mid, bar_h, v["color"], opacity=0.75)
+                _tips(fig, v["pos"], v["end"], y_mid,
+                      f"<b>{v['name']}</b> ({v['group']})<br>"
+                      f"{v['var_type']} {v['pos']:,}-{v['end']:,}")
+                span_label_x      = v["pos"] if strand_mode == "-" else v["end"]
+                fig.add_annotation(
+                    x=span_label_x, y=y_mid,
+                    text=v["name"], showarrow=False,
+                    xanchor="left", yanchor="middle",
+                    font=dict(size=VAR_LABEL_SIZE, color="#333"),
+                )
+            y -= (max(span_rows) + 1) * VAR_ROW_GAP
 
     # ------------------------------------------------------------------
     # "End of loaded region" markers
