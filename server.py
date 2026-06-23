@@ -31,7 +31,6 @@ import plot as P
 import genbank as G
 from config import (
     LOAD_FLANK, VIEW_FLANK,
-    FEATURE_COLORS,
     ALWAYS_HANDLED, DEFAULT_REGION, ORGANISM_SHORT,
     PALETTE, DEFAULT_COLORS, PRIORITY_GROUPS_PATH,
 )
@@ -114,20 +113,22 @@ def _build_extra_types(
 
 def _load_priority_groups_tsv(
     tsv_path: Path,
-) -> list[tuple[str, list[tuple[str, str]]]]:
+) -> tuple[list[tuple[str, list[tuple[str, str]]]], dict[str, str]]:
     """
     Parse priority_groups.tsv into an ordered list of
-    (group_name, [(source_pat, featuretype_pat), ...]).
+    (group_name, [(source_pat, featuretype_pat), ...]) and a group_colors dict.
 
     Rows with status 'exclude' are collected under a special '_excluded_'
     group so the server can filter those features from the flat list.
     Rows with any other status (or missing status column) are 'include'.
     Lines starting with '#' and the header row are ignored.
+    The optional 5th column holds a hex color for each group.
     """
     if not tsv_path.exists():
-        return []
+        return [], {}
 
     raw_rows: list[tuple[str, str, str, str]] = []
+    group_colors: dict[str, str] = {}
     with open(tsv_path) as fh:
         for line in fh:
             stripped = line.rstrip("\n")
@@ -142,8 +143,11 @@ def _load_priority_groups_tsv(
             source = parts[1].strip()
             feat   = parts[2].strip()
             status = parts[3].strip() if len(parts) >= 4 else "include"
+            color  = parts[4].strip() if len(parts) >= 5 else ""
             if group and source and feat:
                 raw_rows.append((group, source, feat, status))
+                if color and group not in group_colors:
+                    group_colors[group] = color
 
     # Assemble into ordered (group, [patterns]) preserving row order.
     group_patterns: dict[str, list[tuple[str, str]]] = {}
@@ -155,7 +159,7 @@ def _load_priority_groups_tsv(
             group_order.append(key)
         group_patterns[key].append((source, feat))
 
-    return [(g, group_patterns[g]) for g in group_order]
+    return [(g, group_patterns[g]) for g in group_order], group_colors
 
 
 def _validate_priority_groups(
@@ -200,19 +204,19 @@ def _validate_priority_groups(
 
 def _load_and_validate_priority_groups(
     tsv_path: Path,
-) -> list[tuple[str, list[tuple[str, str]]]]:
+) -> tuple[list[tuple[str, list[tuple[str, str]]]], dict[str, str]]:
     """Load priority_groups.tsv from the configured path and validate it.
-    If the file does not exist, priority groups are disabled (returns [])."""
+    Returns (groups, group_colors). If the file does not exist, returns ([], {})."""
     if not tsv_path.exists():
         print(f"[priority_groups] {tsv_path} not found — priority panel disabled.")
-        return []
-    raw = _load_priority_groups_tsv(tsv_path)
+        return [], {}
+    raw, group_colors = _load_priority_groups_tsv(tsv_path)
     if not raw:
         if tsv_path.exists():
             print("[priority_groups] priority_groups.tsv is empty or has no valid rows.")
         else:
             print("[priority_groups] No priority_groups.tsv found — priority panel disabled.")
-        return []
+        return [], {}
     validated = _validate_priority_groups(raw)
     include_groups = [(g, p) for g, p in validated if g != "_excluded_"]
     n_groups   = len(include_groups)
@@ -221,7 +225,7 @@ def _load_and_validate_priority_groups(
         f"[priority_groups] Loaded {n_groups} group(s), "
         f"{n_patterns} pattern(s) from {tsv_path.name}."
     )
-    return validated   # keep _excluded_ entry for feature filtering
+    return validated, group_colors   # keep _excluded_ entry for feature filtering
 
 
 
@@ -277,7 +281,7 @@ def server(input, output, session):
     # The '_excluded_' pseudo-group (if present) is kept here for feature
     # filtering but never shown in the UI.
     from config import PRIORITY_GROUPS_PATH
-    _pg_all      = _load_and_validate_priority_groups(PRIORITY_GROUPS_PATH)
+    _pg_all, _pg_colors = _load_and_validate_priority_groups(PRIORITY_GROUPS_PATH)
     # Separate include groups (shown in UI) from excluded patterns
     priority_groups    = reactive.Value(
         [(g, p) for g, p in _pg_all if g != "_excluded_"]
@@ -285,6 +289,8 @@ def server(input, output, session):
     excluded_patterns  = reactive.Value(
         next((p for g, p in _pg_all if g == "_excluded_"), [])
     )
+    # Per-group colors loaded from the TSV; serve as defaults before user overrides.
+    priority_group_colors = reactive.Value(_pg_colors)
 
     # Note: download window is read directly from the FigureWidget at click
     # time via _current_window(), so no active_window reactive Value is needed.
@@ -951,6 +957,7 @@ def server(input, output, session):
         Color input IDs are col_<safe_id>.
         """
         colors = dict(DEFAULT_COLORS)  # start fresh from defaults
+        colors.update(priority_group_colors())  # TSV-loaded group colors as defaults
         # Core structural types
         for ft in ("CDS", "five_prime_UTR", "three_prime_UTR", "intron"):
             try:
@@ -1236,7 +1243,7 @@ def server(input, output, session):
             # Only show the toggle if this group has features in the loaded region
             if not pg_data.get(g):
                 continue
-            color = colors.get(g, FEATURE_COLORS.get(g, "#9E9E9E"))
+            color = colors.get(g, "#9E9E9E")
             switch_id = f"pg_{_safe_id(g)}"
             items.append(ui.div(
                 {"class": "ft-item"},
@@ -1370,7 +1377,6 @@ def server(input, output, session):
             return fig
 
         chrom, load_start, load_end = r
-        from config import VIEW_FLANK
 
         # Read reset_view to take a reactive dependency on it — when the
         # Reset button fires, this increments and triggers a re-render.

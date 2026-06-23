@@ -94,7 +94,7 @@ The app expects three files in a single data directory:
 | File | Description |
 |------|-------------|
 | `*.gff3` or `*.gff3.gz` | Prepared, merged GFF3 annotation file |
-| `*.fa` | Genome FASTA (must be indexed with `samtools faidx`) |
+| `*.fa` or `*.fa.gz` | Genome FASTA (must be indexed with `samtools faidx`; bgzip compression supported and recommended for shinyapps.io deployments) |
 | `*.gff3.db` | gffutils SQLite database built from the GFF3 |
 
 The default data directory is `./data` (alongside `app.py`).  Override it
@@ -176,6 +176,21 @@ samtools faidx genome.fa
 
 This creates `genome.fa.fai` alongside the FASTA.  `pyfaidx` (used by the app)
 requires this index to be present.
+
+**Reducing file size for shinyapps.io:** The FASTA is typically the largest
+deployable file after the DB.  Compressing it with `bgzip` (part of htslib/samtools)
+reduces a ~100 MB genome to ~26 MB with no loss of functionality — `pyfaidx`
+handles bgzipped FASTA transparently:
+
+```bash
+bgzip genome.fa                    # creates genome.fa.gz (~26 MB for C. elegans)
+samtools faidx genome.fa.gz        # creates genome.fa.gz.fai and genome.fa.gz.gzi
+```
+
+Then update `FASTA_PATH` in `config.py` to point to the `.fa.gz` file and
+delete the uncompressed `.fa` and `.fa.fai`.  The shinyapps.io free tier limit
+is 1 GB; for the C. elegans WormBase dataset this compression keeps the
+deployment comfortably under that ceiling.
 
 ---
 

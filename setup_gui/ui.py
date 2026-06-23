@@ -109,6 +109,9 @@ SETUP_CSS = APP_CSS + """
 .prio-gbtn { font-size:0.76em; padding:2px 7px; border:1px solid #ccc;
              border-radius:4px; background:#fff; cursor:pointer; color:#333; }
 .prio-gbtn:hover { background:#e8f0fe; border-color:#4a90d9; }
+/* Color dot in group card header — override the 10×10 dot to match button height */
+.prio-gctl .dot.color-edit-btn { width:20px; height:20px; border-radius:4px;
+                                  border:1px solid #ccc; outline-offset:1px; }
 .prio-del:hover { background:#fdeaea; border-color:#c0392b; color:#c0392b; }
 .prio-rule { display:flex; align-items:center; gap:8px; padding:2px 0 2px 14px;
              font-size:0.82em; }
@@ -180,9 +183,48 @@ def _placeholder(step: str) -> ui.Tag:
     )
 
 
+_SWATCH_JS = """
+document.addEventListener("click", function(e) {
+  // Dot click: toggle the swatch palette open/closed.
+  var dot = e.target.closest(".dot.color-edit-btn");
+  if (dot) {
+    var row = dot.closest(".ft-item").querySelector(".swatch-row");
+    if (row) row.classList.toggle("open");
+    return;
+  }
+  // Swatch click: send {group, color} JSON to the dispatch input, update visuals.
+  var swatch = e.target.closest(".color-swatch");
+  if (!swatch) return;
+  var inputId = swatch.dataset.ft;
+  var group   = swatch.dataset.group;
+  var color   = swatch.dataset.color;
+  if (window.Shiny && inputId) {
+    Shiny.setInputValue(inputId, JSON.stringify({group: group, color: color}),
+                        {priority: "event"});
+  }
+  var row = swatch.closest(".swatch-row");
+  if (row) {
+    row.querySelectorAll(".color-swatch").forEach(function(s) {
+      s.classList.toggle("selected",
+        s.dataset.color.toUpperCase() === color.toUpperCase());
+    });
+    row.classList.remove("open");
+    var ftItem = row.closest(".ft-item");
+    if (ftItem) {
+      var dot = ftItem.querySelector(".dot");
+      if (dot) dot.style.background = color;
+    }
+  }
+});
+"""
+
+
 def make_setup_ui() -> ui.Tag:
     return ui.page_fluid(
-        ui.tags.head(ui.tags.style(SETUP_CSS)),
+        ui.tags.head(
+            ui.tags.style(SETUP_CSS),
+            ui.tags.script(ui.HTML(_SWATCH_JS)),
+        ),
         ui.tags.h2(
             f"gff2genbank — Setup  {SETUP_VERSION}",
             style="padding:12px 0 5px; color:#1a252f; font-weight:700;",

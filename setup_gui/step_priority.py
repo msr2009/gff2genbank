@@ -18,6 +18,7 @@ delete groups; remove individual rules.
 
 import asyncio
 import json
+import re
 import sys
 from pathlib import Path
 
@@ -36,6 +37,10 @@ DB_EXTS = (".db",)
 NEW_GROUP = "➕ new group…"   # sentinel option in the assign dropdown
 
 
+def _safe_id(name: str) -> str:
+    return re.sub(r"[^a-zA-Z0-9_]", "_", name)
+
+
 @module.ui
 def priority_ui() -> ui.Tag:
     return ui.div(
@@ -52,6 +57,17 @@ def priority_ui() -> ui.Tag:
             ui.tags.summary("Use a different database"),
             file_browser_ui("priodb", "Database (.db)"),
         ),
+        ui.tags.details(
+            ui.tags.summary("Load rules from an existing priority_groups.tsv"),
+            ui.div({"style": "padding: 0.5rem 0"},
+                file_browser_ui("priotsv", "Priority groups (.tsv)"),
+                ui.input_action_button("import_tsv_btn", "Import rules",
+                                       class_="btn btn-secondary btn-sm",
+                                       style="margin-top: 0.5rem"),
+                ui.output_ui("import_tsv_status"),
+            ),
+        ),
+        ui.hr(style="margin: 6px 0;"),
         ui.div({"class": "card"},
             ui.input_action_button("scan_db_btn", "Scan database",
                                    class_="btn btn-primary w-100"),
@@ -73,10 +89,13 @@ def priority_ui() -> ui.Tag:
 
 @module.server
 def priority_server(input, output, session, app_session: reactive.Value):
-    priodb_sel = file_browser_server("priodb", start_dir=None, extensions=DB_EXTS)
+    priodb_sel  = file_browser_server("priodb",  start_dir=None, extensions=DB_EXTS)
+    priotsv_sel = file_browser_server("priotsv", start_dir=None, extensions=(".tsv",))
+    import_msg  = reactive.Value("")
 
     pairs         = reactive.Value(None)   # list[(source, featuretype, count)] | None
     rows          = reactive.Value([])     # list[(group, source, featuretype, status)]  SSOT
+    group_colors  = reactive.Value({})    # dict[group_name, hex_color]
     prio_error_v  = reactive.Value("")
     saved_msg     = reactive.Value("")
     rename_target = reactive.Value(None)   # group name pending rename, or None
@@ -92,7 +111,8 @@ def priority_server(input, output, session, app_session: reactive.Value):
 
     bind_busy_button("scan_db_btn", scan_running, "Scan database", "Scanning…")
 
-    group_action_id = session.ns("group_action")
+    group_action_id   = session.ns("group_action")
+    prio_col_change_id = session.ns("prio_col_change")
 
     # ── DB resolution + scan ────────────────────────────────────────────────
     @reactive.calc
@@ -121,11 +141,11 @@ def priority_server(input, output, session, app_session: reactive.Value):
         def step(m: str) -> None:
             _scan_msgs.append(m)
         ps = await asyncio.to_thread(engine.scan_db_pairs, db_path, step)
-        existing = await asyncio.to_thread(engine.load_priority_groups, tsv_path)
+        existing, existing_colors = await asyncio.to_thread(engine.load_priority_groups, tsv_path)
         step(f"Loaded {len(existing)} existing rule(s) from {tsv_path.name}."
              if existing
              else f"No existing rules in {tsv_path.name} — starting fresh.")
-        return {"pairs": ps, "rows": existing}
+        return {"pairs": ps, "rows": existing, "group_colors": existing_colors}
 
     @reactive.effect
     @reactive.event(input.scan_db_btn)
@@ -140,6 +160,7 @@ def priority_server(input, output, session, app_session: reactive.Value):
         _scan_msgs.clear()
         scan_log.set([])
         pairs.set(None)
+        group_colors.set({})
         scan_running.set(True)
         scan_task(Path(db), Path(input.out_tsv()))
 
@@ -162,6 +183,7 @@ def priority_server(input, output, session, app_session: reactive.Value):
         _sel_all_prev.clear()
         pairs.set(res["pairs"])
         rows.set(res["rows"])
+        group_colors.set(res.get("group_colors", {}))
 
     @reactive.effect
     def _sync_sel_all():
@@ -415,9 +437,29 @@ def priority_server(input, output, session, app_session: reactive.Value):
                      {"class": "upload-note"}))
 
         blocks = []
+        gc = group_colors()
         for i, g in enumerate(order):
             rules = [r for r in current if r[0] == g and r[3] == "include"]
+            cur_color = gc.get(g, "#9E9E9E")
+            color_picker = ui.tags.div(
+                {"class": "ft-item",
+                 "style": "display:inline-flex;flex-direction:column;"},
+                ui.tags.span({"class": "dot color-edit-btn",
+                              "style": f"background:{cur_color};",
+                              "title": "Group color"}),
+                ui.tags.div({"class": "swatch-row"},
+                    *[ui.tags.span(
+                        {"class": "color-swatch" + (
+                            " selected" if h.upper() == cur_color.upper() else ""),
+                         "style": f"background:{h};",
+                         "data-ft": prio_col_change_id,
+                         "data-group": g,
+                         "data-color": h},
+                    ) for h in config.PALETTE],
+                ),
+            )
             controls = ui.span({"class": "prio-gctl"},
+                color_picker,
                 _gbtn("▲", {"verb": "up", "group": g}),
                 _gbtn("▼", {"verb": "down", "group": g}),
                 _gbtn("Rename", {"verb": "rename", "group": g}),
@@ -487,6 +529,9 @@ def priority_server(input, output, session, app_session: reactive.Value):
                     rows.set(engine.pg_reorder(current, order))
         elif verb == "delete":
             rows.set([r for r in current if r[0] != g or r[3] == "exclude"])
+            gc = dict(group_colors())
+            gc.pop(g, None)
+            group_colors.set(gc)
             if rename_target() == g:
                 rename_target.set(None)
         elif verb == "rename":
@@ -501,6 +546,7 @@ def priority_server(input, output, session, app_session: reactive.Value):
                       if not (r[1] == s and r[2] == f and r[3] == "exclude")])
         elif verb == "clear_all":
             rows.set([])
+            group_colors.set({})
             rename_target.set(None)
 
     @reactive.effect
@@ -512,12 +558,66 @@ def priority_server(input, output, session, app_session: reactive.Value):
         if old and new and new != old:
             rows.set([(new if grp == old else grp, s, f, st)
                       for (grp, s, f, st) in rows()])
+            gc = dict(group_colors())
+            if old in gc:
+                gc[new] = gc.pop(old)
+                group_colors.set(gc)
         rename_target.set(None)
 
     @reactive.effect
     @reactive.event(input.rename_cancel)
     def _rename_cancel():
         rename_target.set(None)
+
+    @reactive.effect
+    @reactive.event(input.prio_col_change)
+    def _update_group_colors():
+        """Capture swatch selections dispatched via the prio_col_change input."""
+        try:
+            data = json.loads(input.prio_col_change())
+            g     = data.get("group")
+            color = data.get("color")
+            if g and color:
+                gc = dict(group_colors())
+                gc[g] = color
+                group_colors.set(gc)
+        except Exception:
+            pass
+
+    # ── Import from existing TSV ────────────────────────────────────────────
+    @reactive.effect
+    @reactive.event(input.import_tsv_btn)
+    def _import_tsv():
+        import_msg.set("")
+        p = priotsv_sel()
+        if not p or not p.exists():
+            import_msg.set("error:No file selected — use the browser above to pick a .tsv.")
+            return
+        try:
+            loaded, loaded_colors = engine.load_priority_groups(p)
+        except Exception as exc:
+            import_msg.set(f"error:Could not read {p.name}: {exc}")
+            return
+        if not loaded:
+            import_msg.set("error:File contains no valid rules.")
+            return
+        rows.set(loaded)
+        group_colors.set(loaded_colors)
+        saved_msg.set("")
+        rename_target.set(None)
+        n_groups = len(engine.pg_group_order(loaded))
+        n_excl = sum(1 for r in loaded if r[3] == "exclude")
+        import_msg.set(f"ok:Loaded {len(loaded)} rule(s) from {p.name}: "
+                       f"{n_groups} group(s), {n_excl} excluded.")
+
+    @render.ui
+    def import_tsv_status():
+        msg = import_msg()
+        if not msg:
+            return ui.div()
+        kind, text = msg.split(":", 1)
+        cls = "fb-chosen" if kind == "ok" else "fb-error"
+        return ui.div(text, {"class": cls, "style": "margin-top: 0.4rem"})
 
     # ── Output path overwrite warning ───────────────────────────────────────
     @render.ui
@@ -554,7 +654,7 @@ def priority_server(input, output, session, app_session: reactive.Value):
             prio_error_v.set(f"Output folder does not exist: {out.parent}")
             return
         try:
-            engine.save_priority_groups(out, rows())
+            engine.save_priority_groups(out, rows(), group_colors())
         except Exception as e:
             prio_error_v.set(f"Save failed: {e}")
             return

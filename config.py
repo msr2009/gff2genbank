@@ -28,12 +28,11 @@ DATA_DIR   = Path(os.environ.get(
     "GFF_APP_DATA_DIR",
     str(Path(__file__).parent / "data")
 ))
-GFF_PATH              = DATA_DIR / "c_elegans+ahringer-mmp.gff3"
-FASTA_PATH            = DATA_DIR / "c_elegans.PRJNA13758.WS259.genomic.fa"
-DB_PATH               = DATA_DIR / "c_elegans+ahringer-mmp.gff3.db"
-# Priority groups TSV — sits alongside app.py for easy editing.
-# Override by placing a priority_groups.tsv in DATA_DIR and updating this path.
-PRIORITY_GROUPS_PATH  = Path(__file__).parent / "priority_groups.tsv"
+GFF_PATH              = DATA_DIR / "c_elegans.annotations.gff2genbank.gff3.gz"
+FASTA_PATH            = DATA_DIR / "c_elegans.PRJNA13758.WS259.genomic.fa.gz"
+DB_PATH               = DATA_DIR / "c_elegans.annotations.gff2genbank.gff3.gz.db"
+# Priority groups TSV — stored in data/ alongside the other data files.
+PRIORITY_GROUPS_PATH  = DATA_DIR / "worm_default.priority_groups.tsv"
 
 # ---------------------------------------------------------------------------
 # Default region loaded automatically on startup.
@@ -44,7 +43,7 @@ PRIORITY_GROUPS_PATH  = Path(__file__).parent / "priority_groups.tsv"
 DEFAULT_REGION = "III:10,901,491-10,910,085"
 
 # Default gene name shown in the gene-name input box.
-DEFAULT_GENE = "ced-3"
+DEFAULT_GENE = "unc-119"
 
 # ---------------------------------------------------------------------------
 # Loading behaviour
@@ -112,11 +111,6 @@ FEATURE_COLORS: dict[str, str] = {
     "snRNA":                 "#2980b9",
     "rRNA":                  "#c0392b",
     "tRNA":                  "#e74c3c",
-    # Default colors for the built-in WormBase priority groups; override via
-    # priority_groups.tsv or the in-app color swatches.
-    "Classical allele":      "#c0392b",   # red
-    "MMP allele":            "#e8a838",   # gold
-    "HTP allele":            "#2980b9",   # blue
 }
 
 
@@ -153,7 +147,4 @@ PALETTE = [
 # Default color map for all feature and variant group types.
 # This is the starting point for per-session color overrides.
 # Any type not listed here falls back to "#9E9E9E" (medium gray).
-DEFAULT_COLORS: dict[str, str] = {
-    **FEATURE_COLORS,
-    # Ensure all palette-eligible types have an entry even if not in FEATURE_COLORS
-}
+DEFAULT_COLORS: dict[str, str] = dict(FEATURE_COLORS)

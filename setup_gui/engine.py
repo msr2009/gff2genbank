@@ -139,7 +139,7 @@ def scan_pairs(gff_paths: list[Path], step: StepFn = _noop) -> tuple[list[dict],
                 if len(parts) < 9:
                     continue
                 seen += 1
-                if seen % 250_000 == 0:
+                if seen % 500_000 == 0:
                     step(f"  {gff.name}: scanned {seen:,} lines…")
                 key = (parts[1], parts[2])
                 nbytes = len(line.encode("utf-8"))
@@ -362,7 +362,7 @@ def scan_db_pairs(db_path: Path, step: StepFn = _noop) -> list[tuple[str, str, i
     """All (source, featuretype, count) pairs in the DB (blank source/featuretype
     rows excluded), sorted alphabetically by (source, feature type).
 
-    Streams rows from SQLite one at a time and reports progress every 250 k
+    Streams rows from SQLite one at a time and reports progress every 500 k
     features — same pattern as scan_pairs (Step 2) — so the log box updates
     live rather than blocking until the GROUP BY finishes.
     """
@@ -381,7 +381,7 @@ def scan_db_pairs(db_path: Path, step: StepFn = _noop) -> list[tuple[str, str, i
         key = (src, ft)
         counts[key] = counts.get(key, 0) + 1
         seen += 1
-        if seen % 250_000 == 0:
+        if seen % 500_000 == 0:
             step(f"  scanned {seen:,} features…")
     pairs = sorted(
         [(src, ft, cnt) for (src, ft), cnt in counts.items()],
@@ -394,14 +394,16 @@ def scan_db_pairs(db_path: Path, step: StepFn = _noop) -> list[tuple[str, str, i
     return pairs
 
 
-def load_priority_groups(tsv_path: Path) -> list[tuple[str, str, str, str]]:
-    """Existing (group, source, featuretype, status) rows, or [] if absent."""
+def load_priority_groups(
+    tsv_path: Path,
+) -> tuple[list[tuple[str, str, str, str]], dict[str, str]]:
+    """Return (rows, group_colors) from an existing TSV, or ([], {}) if absent."""
     from setup import s04_priority_groups as s04
     p = Path(tsv_path)
     if not p.exists():
-        return []
-    rows, _ = s04.load_tsv(p)
-    return rows
+        return [], {}
+    rows, _, group_colors = s04.load_tsv(p)
+    return rows, group_colors
 
 
 def classify_pair(source: str, feat: str,
@@ -445,16 +447,56 @@ def pg_reorder(rows, new_order: list[str]):
     return reordered + exclude_rows
 
 
-def save_priority_groups(tsv_path: Path,
-                         rows: list[tuple[str, str, str, str]]) -> None:
-    """Write priority_groups.tsv from (group, source, featuretype, status) rows."""
+def save_priority_groups(
+    tsv_path: Path,
+    rows: list[tuple[str, str, str, str]],
+    group_colors: dict[str, str] | None = None,
+) -> None:
+    """Write priority_groups.tsv from rows and optional group_colors dict."""
     from setup import s04_priority_groups as s04
-    s04.save_tsv(Path(tsv_path), rows)
+    s04.save_tsv(Path(tsv_path), rows, group_colors)
 
 
 # ---------------------------------------------------------------------------
 # Step 5 — validate the finished setup (reuses setup/s05_validate.py checks)
 # ---------------------------------------------------------------------------
+
+def update_config_paths(
+    fasta_path: Path,
+    db_path: Path,
+    priority_groups_path: Path,
+) -> None:
+    """
+    Rewrite the three data-file path lines in config.py to use paths relative
+    to the project root (Path(__file__).parent / "...") when the files live
+    inside the project tree, or absolute Path(...) literals otherwise.
+    """
+    import re
+
+    config_path = _PROJECT_ROOT / "config.py"
+    text = config_path.read_text()
+
+    def _rhs(p: Path) -> str:
+        try:
+            rel = p.resolve().relative_to(_PROJECT_ROOT.resolve())
+            return f'Path(__file__).parent / "{rel.as_posix()}"'
+        except ValueError:
+            return f'Path(r"{p}")'
+
+    replacements = [
+        ("FASTA_PATH", fasta_path),
+        ("DB_PATH", db_path),
+        ("PRIORITY_GROUPS_PATH", priority_groups_path),
+    ]
+    for var, new_path in replacements:
+        pattern = rf"^({re.escape(var)}\s*=\s*).*$"
+        rhs = _rhs(new_path)
+        text, n = re.subn(pattern, rf"\g<1>{rhs}", text, flags=re.MULTILINE)
+        if n == 0:
+            raise ValueError(f"Could not find '{var}' assignment in config.py")
+
+    config_path.write_text(text)
+
 
 def validate_setup(
     db_path: Path,
