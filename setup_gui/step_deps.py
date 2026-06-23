@@ -12,6 +12,7 @@ import asyncio
 
 from shiny import module, ui, render, reactive
 
+from .logbox import spinner, bind_busy_button
 from . import engine
 
 
@@ -36,26 +37,36 @@ def deps_ui() -> ui.Tag:
 def deps_server(input, output, session, app_session: reactive.Value):
     deps_result  = reactive.Value(None)   # list[dict] | None
     deps_running = reactive.Value(False)
+    deps_error_v = reactive.Value("")
 
     @reactive.extended_task
     async def deps_task():
         return await asyncio.to_thread(engine.check_dependencies)
 
+    bind_busy_button("recheck", deps_running, "Re-check", "Checking…")
+
     @reactive.effect
     def _autostart():
         # Runs once on session load (no reactive dependencies).
+        deps_error_v.set("")
         deps_running.set(True)
         deps_task()
 
     @reactive.effect
     @reactive.event(input.recheck)
     def _recheck():
+        deps_error_v.set("")
         deps_running.set(True)
         deps_task()
 
     @reactive.effect
     def _ingest_deps():
-        if deps_task.status() != "success":
+        st = deps_task.status()
+        if st == "error":
+            deps_running.set(False)
+            deps_error_v.set(f"Dependency check failed: {deps_task.error()}")
+            return
+        if st != "success":
             return
         rows = deps_task.result()
         deps_running.set(False)
@@ -69,7 +80,10 @@ def deps_server(input, output, session, app_session: reactive.Value):
     @render.ui
     def deps_summary():
         if deps_running():
-            return ui.div(ui.tags.span("⏳ Checking…", {"class": "fb-spinner"}))
+            return ui.div(spinner("Checking…"))
+        err = deps_error_v()
+        if err:
+            return ui.div(err, {"class": "fb-error"})
         rows = deps_result()
         if not rows:
             return ui.div()

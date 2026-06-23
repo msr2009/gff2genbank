@@ -115,11 +115,6 @@ def scan_pairs(gff_paths: list[Path], step: StepFn = _noop) -> tuple[list[dict],
                    for a hover tooltip.
       gff_chroms — unique col-1 chromosome names across all inputs.
 
-    NOTE: unlike setup/s04_priority_groups.py, we deliberately do NOT exclude
-    config.ALWAYS_HANDLED structural types here.  The prepare step must keep
-    gene/mRNA/exon/CDS/UTR rows — the downstream gffutils database depends on
-    them — so every pair is reported and the caller pre-selects structural
-    rows rather than hiding them.
     """
     # (source, ftype) -> [count, bytes, sampler]. sampler is None while the
     # examples reservoir is still filling, then [W, next_index] (Algorithm L).
@@ -144,7 +139,7 @@ def scan_pairs(gff_paths: list[Path], step: StepFn = _noop) -> tuple[list[dict],
                 if len(parts) < 9:
                     continue
                 seen += 1
-                if seen % 1_000_000 == 0:
+                if seen % 250_000 == 0:
                     step(f"  {gff.name}: scanned {seen:,} lines…")
                 key = (parts[1], parts[2])
                 nbytes = len(line.encode("utf-8"))
@@ -364,12 +359,26 @@ def build_database(
 # ---------------------------------------------------------------------------
 
 def scan_db_pairs(db_path: Path, step: StepFn = _noop) -> list[tuple[str, str, int]]:
-    """(source, featuretype, count) pairs in the DB, excluding structural types
-    (config.ALWAYS_HANDLED). Delegates to s04_priority_groups.scan_db."""
-    from setup import s04_priority_groups as s04
-    step(f"Scanning {Path(db_path).name} for feature pairs…")
-    pairs = s04.scan_db(Path(db_path))
-    step(f"Found {len(pairs)} assignable (source, feature type) pair(s).")
+    """All (source, featuretype, count) pairs in the DB (blank source/featuretype
+    rows excluded), sorted alphabetically by (source, feature type)."""
+    import gffutils
+    step(f"Scanning {Path(db_path).name} for (source, feature type) pairs…")
+    step("  (this may take a moment on large databases — running GROUP BY query…)")
+    db = gffutils.FeatureDB(str(db_path))
+    cur = db.conn.execute(
+        "SELECT source, featuretype, COUNT(*) "
+        "FROM features "
+        "GROUP BY source, featuretype "
+        "ORDER BY COUNT(*) DESC"
+    )
+    pairs = [
+        (row[0], row[1], row[2])
+        for row in cur.fetchall()
+        if row[0] not in ("", ".") and row[1] not in ("", ".")
+    ]
+    pairs = sorted(pairs, key=lambda p: (p[0].lower(), p[1].lower()))
+    n_src = len({p[0] for p in pairs})
+    step(f"Found {len(pairs):,} pair(s) across {n_src} source(s).")
     return pairs
 
 
@@ -452,9 +461,10 @@ def validate_setup(
     from setup import s05_validate as s05
 
     results: list[dict] = []
+    step("Running 5 setup checks…")
 
     def add(label, ok, message, warnings=None):
-        step(f"{'✓' if ok else '✗'} {label}: {message}")
+        step(f"  {'✓' if ok else '✗'} {label}: {message}")
         results.append({"label": label, "ok": ok, "message": message,
                         "warnings": warnings or []})
 

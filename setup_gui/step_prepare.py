@@ -16,24 +16,33 @@ All real work is delegated to setup_gui/engine.py (which wraps prepare_gff.py).
 """
 
 import asyncio
-import json
 import sys
 from pathlib import Path
 
 from shiny import module, ui, render, reactive
 
-from .logbox import log_box_ui, log_lines
+from .logbox import log_box_ui, log_lines, spinner, bind_busy_button
 from .filebrowser import (
     file_browser_ui, file_browser_server,
     GFF_EXTS, FASTA_EXTS, VCF_EXTS,
 )
 from . import engine
 
-# project-root config (DATA_DIR, ALWAYS_HANDLED)
+# project-root config (DATA_DIR)
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
 if str(_PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(_PROJECT_ROOT))
 import config  # noqa: E402
+
+
+# Feature types the browse app requires to be present in the prepared GFF.
+# Mirrors data.py's transcript_types and genbank.py's rendering logic.
+_TRANSCRIPT_TYPES = frozenset({
+    "mRNA", "ncRNA", "pseudogenic_transcript",
+    "piRNA", "lincRNA", "pre_miRNA", "miRNA",
+    "snoRNA", "snRNA", "rRNA", "tRNA",
+})
+_BLOCK_TYPES = frozenset({"CDS", "exon"})
 
 
 # ---------------------------------------------------------------------------
@@ -124,13 +133,38 @@ def prepare_gff_server(input, output, session, app_session: reactive.Value):
     prep_error   = reactive.Value("")
     scan_log     = reactive.Value([])
     prep_log     = reactive.Value([])
-    prep_running = reactive.Value(False)   # spinner flag
+    scan_running = reactive.Value(False)   # set True synchronously so button disables instantly
+    prep_running = reactive.Value(False)   # spinner / disable flag for prepare
     prep_result  = reactive.Value(None)    # {"out_path", "n_written"} | None
 
     # Plain (non-reactive) message buffers the background tasks append to;
     # the polling effects copy them into the reactive logs for display.
     _scan_msgs: list[str] = []
     _prep_msgs: list[str] = []
+
+    # Busy-button wiring — disables + animates + relabels each trigger while running.
+    bind_busy_button("scan_btn",    scan_running, "Scan input file(s)", "Scanning…")
+    bind_busy_button("prepare_btn", prep_running, "Prepare GFF",        "Preparing…")
+
+    # Auto-clear scan_err when the user changes inputs so stale errors don't linger.
+    @reactive.effect
+    def _clear_scan_err():
+        _ = gff_paths()   # subscribe to GFF list
+        _ = fasta_sel()   # subscribe to FASTA selection
+        scan_err.set("")
+
+    # Auto-clear prep_error when a new scan lands (new scan = new filter options).
+    @reactive.effect
+    def _clear_prep_err_on_scan():
+        _ = pair_stats()
+        prep_error.set("")
+
+    # Authoritative selection state — single source of truth for both the
+    # selection summary and the keep-set passed to prepare.
+    # Shape: {"modes": {sid: bool}, "keep": {sid: set[str_global_idx]}}
+    # None until first scan lands; seeded wholesale on every re-scan so stale
+    # sids (which remap when scan results change) never survive.
+    sel_state: reactive.Value = reactive.Value(None)
 
     # ── GFF list management ─────────────────────────────────────────────────
     @reactive.effect
@@ -181,7 +215,9 @@ def prepare_gff_server(input, output, session, app_session: reactive.Value):
             return
         scan_err.set("")
         _scan_msgs.clear()
+        scan_log.set([])
         pair_stats.set(None)
+        scan_running.set(True)
         scan_task(gff_paths(), fasta_sel(), vcf_sel())
 
     @reactive.effect
@@ -190,13 +226,25 @@ def prepare_gff_server(input, output, session, app_session: reactive.Value):
         scan_log.set(list(_scan_msgs))
         if st == "running":
             reactive.invalidate_later(0.3)
+        elif st == "error":
+            scan_running.set(False)
 
     @reactive.effect
     def _ingest_scan():
         if scan_task.status() != "success":
             return
+        scan_running.set(False)
         res = scan_task.result()
-        pair_stats.set(res["pair_stats"])
+        # Seed authoritative selection state wholesale so stale sids never survive
+        # a re-scan (sids remap whenever the source count / order changes).
+        stats = res["pair_stats"]
+        order, bysrc = _sources(stats)
+        sel_state.set({
+            "modes": {sid: True for sid in range(len(order))},
+            "keep":  {sid: {str(gi) for gi, _ in bysrc[src]}
+                      for sid, src in enumerate(order)},
+        })
+        pair_stats.set(stats)
         fasta_names.set(res["fasta_names"])
         source_names.set(res["source_names"])
         mismatches.set(res["mismatches"])
@@ -209,11 +257,9 @@ def prepare_gff_server(input, output, session, app_session: reactive.Value):
 
     @render.ui
     def scan_status():
-        st = scan_task.status()
-        if st == "running":
-            return ui.tags.span("⏳ Scanning… (large files may take a moment)",
-                                {"class": "fb-spinner"})
-        if st == "error":
+        if scan_running():
+            return spinner("Scanning… (large files may take a moment)")
+        if scan_task.status() == "error":
             return ui.div(str(scan_task.error()), {"class": "fb-error"})
         return ui.div()
 
@@ -223,9 +269,7 @@ def prepare_gff_server(input, output, session, app_session: reactive.Value):
 
     # ── Filter selector (hierarchical: source ▸ feature types) ──────────────
     # 200+ (source, featuretype) pairs are unusable as a flat list, so we group
-    # by source: each source is a collapsible section with its feature types
-    # inside. NOTE (vs s04_priority_groups): structural ALWAYS_HANDLED types are
-    # shown and KEPT regardless of their checkbox — the DB needs the gene model.
+    # by source: each source is a collapsible section with its feature types inside.
     def _sources(stats):
         """Canonical (stable) source order = count desc. The position index is a
         STABLE source id (sid) used for input names, so changing the *display*
@@ -250,7 +294,6 @@ def prepare_gff_server(input, output, session, app_session: reactive.Value):
         return ("Examples (col 9):\n" + "\n".join(f"• {e}" for e in ex)) if ex else ""
 
     def _ft_label(r: dict) -> ui.Tag:
-        required = r["featuretype"] in config.ALWAYS_HANDLED
         attrs = {"class": "ft-row"}
         t = _ex_title(r)
         if t:
@@ -259,31 +302,7 @@ def prepare_gff_server(input, output, session, app_session: reactive.Value):
             ui.span(r["featuretype"], {"class": "ft-name"}),
             ui.span(f'{r["count"]:,}', {"class": "ft-cnt"}),
             ui.span(f'{r["bytes"]/1e6:.2f} MB', {"class": "ft-mb"}),
-            ui.span("required" if required else "", {"class": "ft-req"}),
         )
-
-    def _req_row(r: dict) -> ui.Tag:
-        """A required (ALWAYS_HANDLED) feature type: shown as a checked, DISABLED
-        checkbox so it can't be unticked (it's always kept)."""
-        attrs = {"class": "ft-row req-row"}
-        t = _ex_title(r)
-        if t:
-            attrs["title"] = t
-        return ui.div(attrs,
-            ui.tags.input(type="checkbox", checked="checked", disabled="disabled",
-                          class_="req-box"),
-            ui.span(r["featuretype"], {"class": "ft-name"}),
-            ui.span(f'{r["count"]:,}', {"class": "ft-cnt"}),
-            ui.span(f'{r["bytes"]/1e6:.2f} MB', {"class": "ft-mb"}),
-            ui.span("required", {"class": "ft-req"}),
-        )
-
-    def _is_req(r) -> bool:
-        return r["featuretype"] in config.ALWAYS_HANDLED
-
-    def _structural_pairs() -> set[tuple[str, str]]:
-        return {(r["source"], r["featuretype"]) for r in (pair_stats() or [])
-                if r["featuretype"] in config.ALWAYS_HANDLED}
 
     def _get(name, default):
         try:
@@ -293,20 +312,38 @@ def prepare_gff_server(input, output, session, app_session: reactive.Value):
             return default
 
     def _keep_pairs() -> set[tuple[str, str]]:
-        """Keep set = (for each source kept via its radio) its checked feature
-        types, ∪ structural pairs (always kept)."""
+        """Keep set derived from the authoritative sel_state — never from raw widget reads.
+        Both selection_summary and _start_prepare call this, so they always agree."""
         stats = pair_stats() or []
-        order, bysrc = _sources(stats)
+        st = sel_state()
+        if not stats or st is None:
+            return set()
         keep: set[tuple[str, str]] = set()
-        for sid, src in enumerate(order):
-            if not _get(f"mode_{sid}", True):   # unticked = drop this source's optionals
+        for sid, kept_idx in st["keep"].items():
+            if not st["modes"].get(sid, True):
                 continue
-            # keep_{sid} holds only OPTIONAL indices (required are always kept below)
-            opt_idx = [str(gi) for gi, r in bysrc[src] if not _is_req(r)]
-            sel = set(_get(f"keep_{sid}", opt_idx) or [])
-            keep |= {(stats[int(i)]["source"], stats[int(i)]["featuretype"])
-                     for i in sel if i.isdigit() and int(i) < len(stats)}
-        return keep | _structural_pairs()   # required (ALWAYS_HANDLED) always kept
+            for i in kept_idx:
+                if i.isdigit() and int(i) < len(stats):
+                    keep.add((stats[int(i)]["source"], stats[int(i)]["featuretype"]))
+        return keep
+
+    def _selection_issues() -> list[str]:
+        """Return a list of problems with the current selection that would
+        cause the browse app to silently lose annotations."""
+        ftypes = {ft for _, ft in _keep_pairs()}
+        issues = []
+        if not (ftypes & _TRANSCRIPT_TYPES):
+            issues.append(
+                "No transcript type selected (mRNA, ncRNA, …). "
+                "The transcript track will be empty and any selected "
+                "CDS/exon features will be invisible in the browse app."
+            )
+        if not (ftypes & _BLOCK_TYPES):
+            issues.append(
+                "No CDS or exon type selected. "
+                "Transcripts will render as featureless spans."
+            )
+        return issues
 
     @render.text
     def selection_summary():
@@ -334,34 +371,23 @@ def prepare_gff_server(input, output, session, app_session: reactive.Value):
         except Exception:
             sort_mode = "name"
 
-        def _src_has_req(src):
-            return any(_is_req(r) for _, r in bysrc[src])
-
-        # Display order: sources that contain required types are PINNED to the
-        # top; within each group apply the chosen sort. (sids are unchanged.)
         disp = list(enumerate(order))           # [(sid, src), …]
         if sort_mode == "name":
             disp = sorted(disp, key=lambda t: t[1].lower())
-        req_first = [t for t in disp if _src_has_req(t[1])]
-        rest = [t for t in disp if not _src_has_req(t[1])]
-        disp = req_first + rest
 
+        st = sel_state() or {"modes": {}, "keep": {}}
         sections = []
-        with reactive.isolate():                # preserve current selections on re-render
+        with reactive.isolate():                # insulate from transient widget values
             for sid, src in disp:
                 items = bysrc[src]
                 if sort_mode == "name":
                     items = sorted(items, key=lambda gr: gr[1]["featuretype"].lower())
-                req_items = [(gi, r) for gi, r in items if _is_req(r)]
-                opt_items = [(gi, r) for gi, r in items if not _is_req(r)]
-                has_req = bool(req_items)
                 tot_c = sum(r["count"] for _, r in items)
                 tot_mb = sum(r["bytes"] for _, r in items) / 1e6
-                # required first (locked), then optional checkbox group
-                opt_choices = {str(gi): _ft_label(r) for gi, r in opt_items}
-                opt_all = [str(gi) for gi, _ in opt_items]
-                cur_sel = _get(f"keep_{sid}", opt_all)
-                cur_mode = bool(_get(f"mode_{sid}", True))
+                choices = {str(gi): _ft_label(r) for gi, r in items}
+                all_idx = [str(gi) for gi, _ in items]
+                cur_sel  = sorted(st["keep"].get(sid, set(all_idx)))
+                cur_mode = bool(st["modes"].get(sid, True))
 
                 head_children = [
                     ui.span({"class": "src-radio", "onclick": "event.stopPropagation()"},
@@ -370,30 +396,16 @@ def prepare_gff_server(input, output, session, app_session: reactive.Value):
                     ui.span(f"{tot_c:,} feat · {tot_mb:.1f} MB · {len(items)} types",
                             {"class": "src-meta"}),
                 ]
-                if has_req:
-                    head_children.append(
-                        ui.span("contains required types", {"class": "src-reqnote"}))
-                    # auto-checked + indeterminate ("ambiguous") to show it can't
-                    # be fully dropped (its required types are always kept).
-                    cid = session.ns(f"mode_{sid}")
-                    head_children.append(ui.tags.script(ui.HTML(
-                        f"(function(){{var e=document.getElementById({json.dumps(cid)});"
-                        f"if(e){{e.indeterminate=true;}}}})();")))
 
                 body = [
                     ui.div({"class": "ft-head"},
                         ui.span("feature type", {"class": "ft-name"}),
                         ui.span("count", {"class": "ft-cnt"}),
-                        ui.span("size", {"class": "ft-mb"}),
-                        ui.span("", {"class": "ft-req"})),
-                ]
-                if req_items:
-                    body.append(ui.div({"class": "ftgrp"},
-                        *[_req_row(r) for _, r in req_items]))
-                if opt_items:
-                    body.append(ui.div({"class": "ftgrp"},
+                        ui.span("size", {"class": "ft-mb"})),
+                    ui.div({"class": "ftgrp"},
                         ui.input_checkbox_group(f"keep_{sid}", None,
-                                                choices=opt_choices, selected=cur_sel)))
+                                                choices=choices, selected=cur_sel)),
+                ]
 
                 sections.append(ui.div({"class": "src-section"},
                     ui.div({"class": "src-head",
@@ -405,8 +417,7 @@ def prepare_gff_server(input, output, session, app_session: reactive.Value):
         return ui.div({"class": "card"},
             ui.tags.h5("Choose feature types to keep"),
             ui.p("Tick a source's checkbox to keep it, untick to drop it. "
-                 "Expand a source to refine which feature types within it to "
-                 "keep. Required types (the gene model) are always kept.",
+                 "Expand a source to refine which feature types within it to keep.",
                  {"class": "upload-note"}),
             ui.div({"class": "prio-actions"},
                 ui.span("Sort:", {"class": "upload-note"}),
@@ -422,21 +433,98 @@ def prepare_gff_server(input, output, session, app_session: reactive.Value):
             ),
             *sections,
             ui.div(ui.output_text("selection_summary"), {"class": "fb-total"}),
+            ui.output_ui("selection_warning"),
         )
+
+    @render.ui
+    def selection_warning():
+        if not pair_stats():
+            return ui.div()
+        issues = _selection_issues()
+        if not issues:
+            return ui.div()
+        return ui.div({"class": "fb-warning"},
+            ui.tags.b("⚠ Missing required annotation types:"),
+            ui.tags.ul(*[ui.tags.li(i) for i in issues]),
+        )
+
+    @reactive.effect
+    def _reconcile_selection():
+        """Single reconcile effect: reads all dynamic mode_{sid}/keep_{sid} widgets
+        and writes changes into sel_state (the authoritative kept-set).
+
+        sel_state is read under isolate() so this effect depends only on widget
+        changes — not on its own writes — avoiding the read+write self-loop freeze.
+
+        Key invariant: an untouched widget (input returns None/raises) keeps the
+        previous state value; an explicitly-emptied widget (returns ()) is honored.
+        This kills the None-vs-() asymmetry that caused summary/prepare disagreement.
+        """
+        stats = pair_stats()
+        if not stats:
+            return
+        order, bysrc = _sources(stats)
+        with reactive.isolate():
+            st = sel_state() or {"modes": {}, "keep": {}}
+        new_modes: dict[int, bool]     = {}
+        new_keep:  dict[int, set[str]] = {}
+        changed = False
+        for sid, src in enumerate(order):
+            all_idx   = {str(gi) for gi, _ in bysrc[src]}
+            prev_mode = st["modes"].get(sid, True)
+            prev_keep = st["keep"].get(sid, set(all_idx))
+            mode = bool(_get(f"mode_{sid}", prev_mode))
+            raw  = _get(f"keep_{sid}", None)   # None → untouched; () → explicitly empty
+            widget_keep = (set(raw) & all_idx) if raw is not None else set(prev_keep)
+            choices = {str(gi): _ft_label(r) for gi, r in bysrc[src]}
+            if mode and not prev_mode:          # source re-added → tick all
+                widget_keep = set(all_idx)
+                ui.update_checkbox_group(f"keep_{sid}", choices=choices,
+                                         selected=list(all_idx))
+            elif (not mode) and prev_mode:      # source dropped → untick all
+                widget_keep = set()
+                ui.update_checkbox_group(f"keep_{sid}", choices=choices, selected=[])
+            new_modes[sid] = mode
+            new_keep[sid]  = widget_keep
+            if mode != prev_mode or widget_keep != prev_keep:
+                changed = True
+        if changed:
+            sel_state.set({"modes": new_modes, "keep": new_keep})
 
     @reactive.effect
     @reactive.event(input.keep_all_btn)
     def _keep_all():
-        order, _ = _sources(pair_stats() or [])
-        for sid in range(len(order)):
+        stats = pair_stats()
+        if not stats:
+            return
+        order, bysrc = _sources(stats)
+        sel_state.set({
+            "modes": {sid: True for sid in range(len(order))},
+            "keep":  {sid: {str(gi) for gi, _ in bysrc[src]}
+                      for sid, src in enumerate(order)},
+        })
+        for sid, src in enumerate(order):
             ui.update_checkbox(f"mode_{sid}", value=True)
+            ui.update_checkbox_group(f"keep_{sid}",
+                choices={str(gi): _ft_label(r) for gi, r in bysrc[src]},
+                selected=[str(gi) for gi, _ in bysrc[src]])
 
     @reactive.effect
     @reactive.event(input.drop_all_btn)
     def _drop_all():
-        order, _ = _sources(pair_stats() or [])
-        for sid in range(len(order)):
+        stats = pair_stats()
+        if not stats:
+            return
+        order, bysrc = _sources(stats)
+        sel_state.set({
+            "modes": {sid: False for sid in range(len(order))},
+            "keep":  {sid: set() for sid in range(len(order))},
+        })
+        for sid, src in enumerate(order):
             ui.update_checkbox(f"mode_{sid}", value=False)
+            ui.update_checkbox_group(f"keep_{sid}",
+                choices={str(gi): _ft_label(r) for gi, r in bysrc[src]},
+                selected=[])
 
     # ── Chromosome mapping editor (inline; no template file) ────────────────
     @render.ui
@@ -530,9 +618,13 @@ def prepare_gff_server(input, output, session, app_session: reactive.Value):
         if not final_gffs():
             prep_error.set("Scan your input file(s) first.")
             return
-        keep = _keep_pairs()  # checked pairs ∪ structural (always kept)
+        keep = _keep_pairs()
         if not keep:
             prep_error.set("Select at least one feature type to keep.")
+            return
+        issues = _selection_issues()
+        if issues:
+            prep_error.set("Cannot prepare: " + " ".join(issues))
             return
         cmap, unmapped = _build_chrom_map()
         if unmapped:
@@ -591,8 +683,7 @@ def prepare_gff_server(input, output, session, app_session: reactive.Value):
 
     @render.ui
     def prepare_status():
-        return (ui.tags.span("⏳ Preparing…", {"class": "fb-spinner"})
-                if prep_running() else ui.div())
+        return spinner("Preparing…") if prep_running() else ui.div()
 
     @render.ui
     def prepare_logbox():

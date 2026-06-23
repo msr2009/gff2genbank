@@ -57,7 +57,17 @@ SETUP_CSS = APP_CSS + """
     background:#fff8e1; border:1px solid #f0d98c; border-radius:5px; padding:6px 9px;
 }
 .fb-warning ul { margin:4px 0 4px 18px; padding:0; }
-.fb-spinner { display:inline-block; color:#2980b9; font-size:0.86em; margin:4px 0; }
+/* .fb-spinner wraps the animated circle (.fb-spin) + label text */
+.fb-spinner { display:inline-flex; align-items:center; gap:6px; color:#2980b9; font-size:0.86em; margin:4px 0; }
+/* CSS-animated circle used inside buttons (via update_action_button icon=) and status lines */
+.fb-spin {
+    display:inline-block; width:0.85em; height:0.85em; vertical-align:-0.1em; flex-shrink:0;
+    border:2px solid #cfe2f3; border-top-color:#2980b9; border-radius:50%;
+    animation:fb-spin 0.7s linear infinite;
+}
+@keyframes fb-spin { to { transform:rotate(360deg); } }
+/* Also animate the icon slot inside a disabled action button */
+.btn .fb-spin { border-color:#cfe2f3; border-top-color:currentColor; }
 .fb-filelist { margin:6px 0 0; padding-left:18px; font-size:0.82em; }
 .fb-filelist code { font-size:0.95em; }
 .fb-arrow { color:#888; margin:0 4px; }
@@ -67,17 +77,15 @@ SETUP_CSS = APP_CSS + """
 }
 /* ── (source, featuretype) keep-table built from a checkbox group ───────── */
 .pc-head {
-    display:flex; gap:8px; padding:2px 8px 4px 30px;
+    display:flex; gap:8px; padding:2px 10px 4px 34px;
     font-size:0.74em; text-transform:uppercase; letter-spacing:0.04em;
     color:#9aa; border-bottom:1px solid #e2e2e2;
 }
 .pc-table { max-height:340px; overflow-y:auto; margin-top:2px; }
-/* tighten the checkbox group rows */
-.pc-table .shiny-input-checkboxgroup .checkbox,
-.pc-table .form-check { margin:0; padding:1px 0; }
-.pc-table .checkbox label, .pc-table .form-check-label {
-    display:flex; align-items:center; width:100%;
-}
+/* The pairs checkbox group reuses the Step 2 `.ftgrp` layout (checkbox parked
+   in a 34px gutter, label = full-width flex row) so the box can't be clipped by
+   the flex row — same fix that was applied to the prepare feature table. See
+   the `.ftgrp` rules below; the 34px left padding above keeps the header aligned. */
 .pc-row { display:flex; gap:8px; align-items:center; width:100%; font-size:0.84em; }
 .pc-src { flex:0 0 32%; color:#34495e; font-weight:600;
           overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
@@ -163,11 +171,6 @@ SETUP_CSS = APP_CSS + """
 .ft-name { flex:0 0 46%; color:#34495e; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .ft-cnt  { flex:0 0 20%; text-align:right; font-family:monospace; color:#666; }
 .ft-mb   { flex:0 0 20%; text-align:right; font-family:monospace; color:#666; }
-.ft-req  { flex:1 1 auto; font-size:0.85em; color:#1a8a4a; font-style:italic; }
-/* locked (always-kept) required feature rows + "contains required" note */
-.ftgrp .req-row { position:relative; padding:1px 0 1px 24px; margin:0; }
-.ftgrp .req-box { position:absolute; left:4px; top:5px; margin:0; cursor:not-allowed; }
-.src-reqnote { flex:0 0 auto; font-size:0.78em; color:#1a8a4a; font-style:italic; }
 /* scrollable log lines (container is a stable output → scroll is preserved).
    Shiny's output_ui container defaults to display:contents (no box), which
    ignores max-height/overflow — force a real block box so it caps + scrolls. */

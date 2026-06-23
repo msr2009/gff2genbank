@@ -17,6 +17,7 @@ from pathlib import Path
 
 from shiny import module, ui, render, reactive
 
+from .logbox import log_box_ui, log_lines, spinner, bind_busy_button
 from . import engine
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -39,6 +40,7 @@ def validate_ui() -> ui.Tag:
             ui.input_action_button("revalidate", "Re-validate",
                                    class_="btn btn-primary"),
             ui.output_ui("val_summary"),
+            log_box_ui("val_logbox"),
         ),
         ui.output_ui("val_table"),
     )
@@ -46,8 +48,13 @@ def validate_ui() -> ui.Tag:
 
 @module.server
 def validate_server(input, output, session, app_session: reactive.Value):
-    results = reactive.Value(None)   # list[dict] | None
-    running = reactive.Value(False)
+    results   = reactive.Value(None)    # list[dict] | None
+    running   = reactive.Value(False)
+    val_error = reactive.Value("")
+    val_log   = reactive.Value([])
+    _val_msgs: list[str] = []
+
+    bind_busy_button("revalidate", running, "Re-validate", "Validating…")
 
     @reactive.calc
     def res_db():
@@ -63,10 +70,16 @@ def validate_server(input, output, session, app_session: reactive.Value):
 
     @reactive.extended_task
     async def validate_task(db, fa, pg, region):
-        return await asyncio.to_thread(engine.validate_setup, Path(db), Path(fa),
-                                       Path(pg), region)
+        def step(m: str) -> None:
+            _val_msgs.append(m)
+        return await asyncio.to_thread(
+            engine.validate_setup, Path(db), Path(fa), Path(pg), region, step
+        )
 
     def _run():
+        _val_msgs.clear()
+        val_log.set([])
+        val_error.set("")
         running.set(True)
         validate_task(res_db(), res_fa(), res_pg(), input.region())
 
@@ -82,10 +95,18 @@ def validate_server(input, output, session, app_session: reactive.Value):
 
     @reactive.effect
     def _ingest():
-        if validate_task.status() != "success":
+        st = validate_task.status()
+        val_log.set(list(_val_msgs))
+        if st == "running":
+            reactive.invalidate_later(0.3)
             return
-        running.set(False)
-        results.set(validate_task.result())
+        if st == "error":
+            running.set(False)
+            val_error.set(f"Validation failed unexpectedly: {validate_task.error()}")
+            return
+        if st == "success":
+            running.set(False)
+            results.set(validate_task.result())
 
     @render.ui
     def inputs_line():
@@ -103,7 +124,10 @@ def validate_server(input, output, session, app_session: reactive.Value):
     @render.ui
     def val_summary():
         if running():
-            return ui.div(ui.tags.span("⏳ Validating…", {"class": "fb-spinner"}))
+            return spinner("Validating…")
+        err = val_error()
+        if err:
+            return ui.div(err, {"class": "fb-error"})
         rows = results()
         if not rows:
             return ui.div()
@@ -116,6 +140,10 @@ def validate_server(input, output, session, app_session: reactive.Value):
         if n_warn:
             msg += f"  ({n_warn} warning(s).)"
         return ui.div(msg, {"class": "fb-chosen"})
+
+    @render.ui
+    def val_logbox():
+        return log_lines(val_log())
 
     @render.ui
     def val_table():

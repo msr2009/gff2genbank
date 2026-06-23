@@ -527,7 +527,7 @@ def process_gff(
                         continue
                     header_done = True
                     seen += 1
-                    if progress and seen % 1_000_000 == 0:
+                    if progress and seen % 250_000 == 0:
                         progress(f"  read {seen:,} lines, kept {written:,}…")
                     parts = line.split("\t")
                     if len(parts) < 9:
@@ -582,7 +582,7 @@ def sort_gff_inplace(gff_path: Path, debug: bool = False, log=None) -> None:
             else:
                 dt.write(line)
                 n += 1
-                if n % 1_000_000 == 0:
+                if n % 250_000 == 0:
                     emit(f"  prepared {n:,} lines for sorting…")
 
     # ── Sort the data temp with the lowest-memory tool available ────────────

@@ -16,6 +16,7 @@ add wildcard rules (* source or featuretype); rename / reorder (precedence) /
 delete groups; remove individual rules.
 """
 
+import asyncio
 import json
 import sys
 from pathlib import Path
@@ -23,6 +24,7 @@ from pathlib import Path
 from shiny import module, ui, render, reactive
 
 from .filebrowser import file_browser_ui, file_browser_server
+from .logbox import log_box_ui, log_lines, spinner, bind_busy_button
 from . import engine
 
 _PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -56,6 +58,8 @@ def priority_ui() -> ui.Tag:
             ui.input_action_button("scan_db_btn", "Scan database",
                                    class_="btn btn-primary w-100"),
             ui.output_text("prio_error"),
+            ui.output_ui("scan_status"),
+            log_box_ui("scan_logbox"),
             ui.output_ui("prio_progress"),
         ),
         ui.output_ui("pairs_card"),       # Zone A — select pairs + actions
@@ -73,6 +77,14 @@ def priority_server(input, output, session, app_session: reactive.Value):
     prio_error_v  = reactive.Value("")
     saved_msg     = reactive.Value("")
     rename_target = reactive.Value(None)   # group name pending rename, or None
+    scan_log      = reactive.Value([])     # streamed scan progress lines
+    scan_running  = reactive.Value(False)  # set True synchronously so button disables instantly
+
+    # Plain buffer the background scan appends to; the poll effect mirrors it
+    # into scan_log for display (same pattern as Steps 2 & 3).
+    _scan_msgs: list[str] = []
+
+    bind_busy_button("scan_db_btn", scan_running, "Scan database", "Scanning…")
 
     group_action_id = session.ns("group_action")
 
@@ -96,9 +108,22 @@ def priority_server(input, output, session, app_session: reactive.Value):
             ui.tags.b("Database: "), ui.tags.code(str(db)),
             ui.tags.span(f"  ({origin})", {"class": "upload-note"}))
 
+    # Scan runs off the UI thread (a GROUP BY over a multi-million-row features
+    # table can take seconds) so its progress can stream into the log box.
+    @reactive.extended_task
+    async def scan_task(db_path, tsv_path):
+        def step(m: str) -> None:
+            _scan_msgs.append(m)
+        ps = await asyncio.to_thread(engine.scan_db_pairs, db_path, step)
+        existing = await asyncio.to_thread(engine.load_priority_groups, tsv_path)
+        step(f"Loaded {len(existing)} existing rule(s) from {tsv_path.name}."
+             if existing
+             else f"No existing rules in {tsv_path.name} — starting fresh.")
+        return {"pairs": ps, "rows": existing}
+
     @reactive.effect
     @reactive.event(input.scan_db_btn)
-    def _scan_db():
+    def _start_scan():
         db = resolved_db()
         if not db or not Path(db).exists():
             prio_error_v.set("No valid database. Finish Step 3 or pick a .db file.")
@@ -106,15 +131,42 @@ def priority_server(input, output, session, app_session: reactive.Value):
         prio_error_v.set("")
         saved_msg.set("")
         rename_target.set(None)
-        try:
-            rows.set(engine.load_priority_groups(Path(input.out_tsv())))
-            pairs.set(engine.scan_db_pairs(Path(db)))
-        except Exception as e:
-            prio_error_v.set(f"Scan failed: {e}")
+        _scan_msgs.clear()
+        scan_log.set([])
+        pairs.set(None)
+        scan_running.set(True)
+        scan_task(Path(db), Path(input.out_tsv()))
+
+    @reactive.effect
+    def _poll_scan():
+        st = scan_task.status()
+        scan_log.set(list(_scan_msgs))
+        if st == "running":
+            reactive.invalidate_later(0.3)
+        elif st == "error":
+            scan_running.set(False)
+            prio_error_v.set(f"Scan failed: {scan_task.error()}")
+
+    @reactive.effect
+    def _ingest_scan():
+        if scan_task.status() != "success":
+            return
+        scan_running.set(False)
+        res = scan_task.result()
+        pairs.set(res["pairs"])
+        rows.set(res["rows"])
 
     @render.text
     def prio_error():
         return prio_error_v()
+
+    @render.ui
+    def scan_status():
+        return spinner("Scanning database…") if scan_running() else ui.div()
+
+    @render.ui
+    def scan_logbox():
+        return log_lines(scan_log())
 
     @render.ui
     def prio_progress():
@@ -196,7 +248,11 @@ def priority_server(input, output, session, app_session: reactive.Value):
                 ui.span("assigned to", {"class": "pa-assign"}),
             ),
             ui.div({"class": "pc-table"},
-                ui.input_checkbox_group("sel_pairs", None, choices=choices),
+                # `.ftgrp` parks the checkbox in a gutter so it can't be clipped
+                # by the flex row label (reused from the Step 2 feature table).
+                ui.div({"class": "ftgrp"},
+                    ui.input_checkbox_group("sel_pairs", None, choices=choices),
+                ),
             ),
             # Zone B: wildcard / advanced rule
             ui.tags.details({"class": "prio-adv"},
@@ -218,6 +274,7 @@ def priority_server(input, output, session, app_session: reactive.Value):
     @reactive.effect
     @reactive.event(input.assign_btn)
     def _assign():
+        saved_msg.set("")
         sel = _selected()
         if not sel:
             prio_error_v.set("Select one or more pairs first.")
@@ -234,6 +291,7 @@ def priority_server(input, output, session, app_session: reactive.Value):
     @reactive.effect
     @reactive.event(input.exclude_btn)
     def _exclude():
+        saved_msg.set("")
         sel = _selected()
         if not sel:
             prio_error_v.set("Select one or more pairs first.")
@@ -246,6 +304,7 @@ def priority_server(input, output, session, app_session: reactive.Value):
     @reactive.effect
     @reactive.event(input.unassign_btn)
     def _unassign():
+        saved_msg.set("")
         sel = _selected()
         if not sel:
             prio_error_v.set("Select one or more pairs first.")
@@ -256,6 +315,7 @@ def priority_server(input, output, session, app_session: reactive.Value):
     @reactive.effect
     @reactive.event(input.add_rule_btn)
     def _add_rule():
+        saved_msg.set("")
         g = (input.rule_group() or "").strip()
         src = (input.rule_source() or "*").strip() or "*"
         ft = (input.rule_feat() or "*").strip() or "*"
@@ -335,6 +395,7 @@ def priority_server(input, output, session, app_session: reactive.Value):
     @reactive.effect
     @reactive.event(input.group_action)
     def _group_action():
+        saved_msg.set("")
         try:
             a = json.loads(input.group_action())
         except Exception:
@@ -368,6 +429,7 @@ def priority_server(input, output, session, app_session: reactive.Value):
     @reactive.effect
     @reactive.event(input.rename_apply)
     def _rename_apply():
+        saved_msg.set("")
         old = rename_target()
         new = (input.rename_value() or "").strip() if _has("rename_value") else ""
         if old and new and new != old:

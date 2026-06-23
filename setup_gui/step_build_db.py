@@ -15,7 +15,7 @@ from pathlib import Path
 from shiny import module, ui, render, reactive
 
 from .filebrowser import file_browser_ui, file_browser_server, GFF_EXTS
-from .logbox import log_box_ui, log_lines
+from .logbox import log_box_ui, log_lines, spinner, bind_busy_button
 from . import engine
 
 
@@ -58,6 +58,8 @@ def build_db_server(input, output, session, app_session: reactive.Value):
     build_error_v = reactive.Value("")
     build_log     = reactive.Value([])
     _build_msgs: list[str] = []
+
+    bind_busy_button("build_btn", build_running, "Build database", "Building…")
 
     @reactive.calc
     def resolved_gff():
@@ -157,9 +159,7 @@ def build_db_server(input, output, session, app_session: reactive.Value):
 
     @render.ui
     def build_status():
-        return (ui.tags.span("⏳ Building database… (large GFFs take minutes)",
-                             {"class": "fb-spinner"})
-                if build_running() else ui.div())
+        return spinner("Building database… (large GFFs take minutes)") if build_running() else ui.div()
 
     @render.ui
     def build_logbox():
