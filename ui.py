@@ -631,6 +631,10 @@ def _app_ui() -> ui.Tag:
                         ui.p("samtools faidx your.fa", {"class": "upload-note"}),
                         ui.input_file("upload_fa",  None, accept=[".fa",".fasta"]),
                         ui.input_file("upload_fai", None, accept=[".fai"]),
+                        ui.tags.b("Priority groups (.tsv)",
+                                  style="font-size:0.86em;"),
+                        ui.p("See priority_groups.tsv format.", {"class": "upload-note"}),
+                        ui.input_file("upload_pg", None, accept=[".tsv"]),
                         ui.input_action_button(
                             "apply_uploads", "Apply uploaded files",
                             class_="btn btn-secondary w-100 mt-2",
@@ -639,12 +643,8 @@ def _app_ui() -> ui.Tag:
                     ),
                     ui.tags.hr(style="margin:8px 0;"),
                     ui.download_button(
-                        "download_build_script", "Download build_db.py",
+                        "download_setup_app", "Download setup app",
                         class_="btn btn-outline-secondary w-100",
-                    ),
-                    ui.download_button(
-                        "download_prepare_script", "Download prepare_gff.py",
-                        class_="btn btn-outline-secondary w-100 mt-1",
                     ),
                 ),
 

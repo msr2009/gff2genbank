@@ -15,9 +15,11 @@ Key fixes in this version:
 """
 
 import asyncio
+import io
 import re
 import shutil
 import tempfile
+import zipfile
 from pathlib import Path
 
 import plotly.graph_objects as go
@@ -541,6 +543,14 @@ def server(input, output, session):
             msgs.append("FASTA + index loaded")
         elif fa_info or fai_info:
             msgs.append("Warning: upload both .fa and .fai together")
+        pg_info = input.upload_pg()
+        if pg_info:
+            dest = tmpdir / "custom_priority_groups.tsv"
+            shutil.copy(pg_info[0]["datapath"], dest)
+            _pg_all = _load_and_validate_priority_groups(dest)
+            priority_groups.set([(g, p) for g, p in _pg_all if g != "_excluded_"])
+            excluded_patterns.set(next((p for g, p in _pg_all if g == "_excluded_"), []))
+            msgs.append("Priority groups loaded")
         upload_msg.set("\n".join(msgs) if msgs else "No files uploaded.")
 
     @output
@@ -1096,7 +1106,6 @@ def server(input, output, session):
             return ui.div()
         return ui.div(
             {"class": "card"},
-            ui.tags.h5("Priority Features"),
             ui.output_ui("priority_toggles"),
         )
 
@@ -1560,11 +1569,36 @@ def server(input, output, session):
         finally:
             loading.set(False)
 
-    # ── Script downloads ───────────────────────────────────────────────────
-    @render.download(filename="build_db.py")
-    def download_build_script():
-        yield (Path(__file__).parent / "build_db.py").read_bytes()
-
-    @render.download(filename="prepare_gff.py")
-    def download_prepare_script():
-        yield (Path(__file__).parent / "prepare_gff.py").read_bytes()
+    # ── Setup app download ─────────────────────────────────────────────────
+    @render.download(filename="gff2genbank_setup.zip")
+    def download_setup_app():
+        root = Path(__file__).parent
+        # Top-level files needed to run setup_app.py
+        top_level = [
+            "setup_app.py",
+            "prepare_gff.py",
+            "build_db.py",
+            "config.py",
+            "ui.py",
+        ]
+        # setup_gui/ package files (skip __pycache__)
+        setup_gui_files = [
+            p for p in (root / "setup_gui").iterdir()
+            if p.is_file() and p.suffix != ".pyc"
+        ]
+        # setup/ package files needed by engine.py (skip __pycache__)
+        setup_files = [
+            p for p in (root / "setup").iterdir()
+            if p.is_file() and p.suffix != ".pyc"
+        ]
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", compression=zipfile.ZIP_DEFLATED) as zf:
+            for name in top_level:
+                p = root / name
+                if p.exists():
+                    zf.write(p, name)
+            for p in setup_gui_files:
+                zf.write(p, f"setup_gui/{p.name}")
+            for p in setup_files:
+                zf.write(p, f"setup/{p.name}")
+        yield buf.getvalue()

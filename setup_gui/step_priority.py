@@ -53,14 +53,17 @@ def priority_ui() -> ui.Tag:
             file_browser_ui("priodb", "Database (.db)"),
         ),
         ui.div({"class": "card"},
-            ui.input_text("out_tsv", "Output priority_groups.tsv path",
-                          value=str(config.PRIORITY_GROUPS_PATH), width="100%"),
             ui.input_action_button("scan_db_btn", "Scan database",
                                    class_="btn btn-primary w-100"),
             ui.output_text("prio_error"),
             ui.output_ui("scan_status"),
             log_box_ui("scan_logbox"),
             ui.output_ui("prio_progress"),
+        ),
+        ui.div({"class": "card"},
+            ui.input_text("out_tsv", "Output priority_groups.tsv path",
+                          value=str(config.PRIORITY_GROUPS_PATH), width="100%"),
+            ui.output_ui("out_tsv_warn"),
         ),
         ui.output_ui("pairs_card"),       # Zone A — select pairs + actions
         ui.output_ui("groups_card"),      # Zone C — groups panel (+ rename form)
@@ -303,7 +306,7 @@ def priority_server(input, output, session, app_session: reactive.Value):
             ui.div({"class": "prio-actions"},
                 ui.input_select("assign_group", None,
                                 choices=(groups + [NEW_GROUP]) if groups else [NEW_GROUP],
-                                selected=(groups[0] if groups else NEW_GROUP)),
+                                selected=NEW_GROUP),
                 ui.input_text("new_group", None, placeholder="new group name"),
                 ui.input_action_button("assign_btn", "Assign selected",
                                        class_="btn btn-sm btn-primary"),
@@ -516,14 +519,32 @@ def priority_server(input, output, session, app_session: reactive.Value):
     def _rename_cancel():
         rename_target.set(None)
 
+    # ── Output path overwrite warning ───────────────────────────────────────
+    @render.ui
+    def out_tsv_warn():
+        try:
+            out = Path(input.out_tsv()).expanduser()
+        except Exception:
+            return ui.div()
+        if out.exists():
+            return ui.div(
+                f"⚠ {out.name} already exists — saving will overwrite it. "
+                "Change the path above to write a new file.",
+                {"class": "fb-warning", "style": "margin-top:6px"},
+            )
+        return ui.div()
+
     # ── Save ────────────────────────────────────────────────────────────────
     @render.ui
     def save_card():
         if pairs() is None:
             return ui.div()
-        return ui.div({"class": "card"},
-            ui.input_action_button("save_btn", "Save priority_groups.tsv",
-                                   class_="btn btn-success w-100"))
+        msg = saved_msg()
+        children = [ui.input_action_button("save_btn", "Save Priority Groups",
+                                            class_="btn btn-success w-100")]
+        if msg:
+            children.append(ui.div(msg, {"class": "fb-chosen", "style": "margin-top:8px"}))
+        return ui.div({"class": "card"}, *children)
 
     @reactive.effect
     @reactive.event(input.save_btn)
