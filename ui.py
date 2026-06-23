@@ -161,6 +161,36 @@ h5 { color: #2c3e50; font-weight: 600; margin: 10px 0 4px; font-size: 0.92rem; }
     0%   { margin-left: -35%; }
     100% { margin-left: 100%; }
 }
+
+/* ── Isoform filter card ────────────────────────────────────────── */
+.iso-gene-row {
+    display: flex; align-items: center; gap: 6px;
+    margin-bottom: 2px;
+}
+.iso-gene-cb { cursor: pointer; flex-shrink: 0; }
+.iso-gene-label { cursor: pointer; font-weight: 600; font-size: 0.88rem; color: #2c3e50; }
+.iso-iso-cb { padding-left: 18px; margin-bottom: 1px; }
+.iso-iso-cb .shiny-input-container { margin-bottom: 0 !important; }
+.iso-iso-cb .form-check-label { font-size: 0.85rem; color: #555; cursor: pointer; }
+.iso-gene-block { margin-bottom: 6px; }
+#isoform_details > summary {
+    list-style: none; cursor: pointer;
+    font-weight: 600; color: #2c3e50; font-size: 0.92rem;
+    display: flex; align-items: center; gap: 5px;
+    padding: 2px 0;
+}
+#isoform_details > summary::before {
+    content: "▶"; font-size: 0.65rem; color: #888;
+    transition: transform 0.15s; display: inline-block;
+}
+#isoform_details[open] > summary::before { transform: rotate(90deg); }
+.iso-all-row {
+    display: flex; align-items: center; gap: 6px;
+    margin-bottom: 6px; padding-bottom: 5px;
+    border-bottom: 1px solid #e8e8e8;
+}
+.iso-all-cb { cursor: pointer; flex-shrink: 0; }
+.iso-all-label { cursor: pointer; font-weight: 600; font-size: 0.88rem; color: #2c3e50; }
 """
 
 # JavaScript that captures Plotly zoom/pan and sends range to Shiny.
@@ -473,7 +503,7 @@ JS = """
       if (_origSetInputValue) return;  // already patched
       _origSetInputValue = Shiny.setInputValue.bind(Shiny);
       Shiny.setInputValue = function(name, value, opts) {
-        if (/^(ft_|var_)/.test(name)) {
+        if (/^(ft_|var_|iso_)/.test(name)) {
           if (timers[name]) clearTimeout(timers[name]);
           timers[name] = setTimeout(function() {
             _origSetInputValue(name, value, opts);
@@ -492,6 +522,69 @@ JS = """
       document.addEventListener("shiny:connected", installPatch);
     }
   })();
+
+  // ── Isoform master "All" checkbox ────────────────────────────────────
+  // When the master checkbox changes, propagate to all isoform checkboxes.
+  document.addEventListener("change", function(e) {
+    var cb = e.target;
+    if (!cb.classList || !cb.classList.contains("iso-all-cb")) return;
+    var details = cb.closest("details");
+    if (!details) return;
+    var checked = cb.checked;
+    details.querySelectorAll(".iso-iso-cb input[type=checkbox]")
+      .forEach(function(inner) {
+        if (inner.checked !== checked) inner.click();
+      });
+  });
+
+  // Helper: sync a parent checkbox (master or gene) to its children's state.
+  function syncParentCb(parentCb, childCbs) {
+    var nChecked = 0;
+    childCbs.forEach(function(c) { if (c.checked) nChecked++; });
+    if (nChecked === 0) {
+      parentCb.indeterminate = false; parentCb.checked = false;
+    } else if (nChecked === childCbs.length) {
+      parentCb.indeterminate = false; parentCb.checked = true;
+    } else {
+      parentCb.indeterminate = true;
+    }
+  }
+
+  // ── Isoform gene-level checkbox propagation ──────────────────────────
+  document.addEventListener("change", function(e) {
+    var cb = e.target;
+    if (!cb.classList || !cb.classList.contains("iso-gene-cb")) return;
+    var gene = cb.dataset.gene;
+    if (!gene) return;
+    var checked = cb.checked;
+    document.querySelectorAll(".iso-iso-cb[data-gene='" + gene + "']")
+      .forEach(function(wrapper) {
+        var inner = wrapper.querySelector("input[type=checkbox]");
+        if (inner && inner.checked !== checked) inner.click();
+      });
+  });
+
+  // Sync gene + master checkbox state when any isoform checkbox changes.
+  document.addEventListener("change", function(e) {
+    var wrapper = e.target.closest ? e.target.closest(".iso-iso-cb") : null;
+    if (!wrapper) return;
+    var details = wrapper.closest("details");
+
+    // Sync the gene-level checkbox
+    var gene = wrapper.dataset.gene;
+    if (gene) {
+      var geneCbs = document.querySelectorAll(".iso-iso-cb[data-gene='" + gene + "'] input[type=checkbox]");
+      var geneCb = document.querySelector(".iso-gene-cb[data-gene='" + gene + "']");
+      if (geneCb && geneCbs.length) syncParentCb(geneCb, geneCbs);
+    }
+
+    // Sync the master "All" checkbox
+    if (details) {
+      var masterCb = details.querySelector(".iso-all-cb");
+      var allIsoCbs = details.querySelectorAll(".iso-iso-cb input[type=checkbox]");
+      if (masterCb && allIsoCbs.length) syncParentCb(masterCb, allIsoCbs);
+    }
+  });
 
 })();
 </script>
@@ -616,6 +709,9 @@ def _app_ui() -> ui.Tag:
                         ),
                     ),
                 ),
+
+                # ── Isoform visibility filter ──────────────────────────────
+                ui.output_ui("isoform_card"),
 
                 # ── Custom data files ───────────────────────────────────────
                 ui.div({"class": "card upload-section"},

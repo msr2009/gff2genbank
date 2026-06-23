@@ -41,6 +41,20 @@ def _safe_id(name: str) -> str:
     return re.sub(r"[^a-zA-Z0-9_]", "_", name)
 
 
+def _gene_label(tx: dict) -> str:
+    name = tx.get("name", tx["id"])
+    if " (" in name:
+        return name.split(" (")[0]
+    return tx.get("gene_id", tx["id"]).removeprefix("Gene:")
+
+
+def _iso_label(tx: dict) -> str:
+    name = tx.get("name", tx["id"])
+    if " (" in name:
+        return name.split("(")[1].rstrip(")")
+    return tx["id"].removeprefix("Transcript:")
+
+
 def _build_extra_types(
     feats: dict,
     tx_types: set,
@@ -676,6 +690,25 @@ def server(input, output, session):
 
         return enabled
 
+    @reactive.calc
+    def active_isoforms():
+        """
+        Returns frozenset of tx["id"] values for visible mRNA isoforms.
+        Reads iso_* checkbox inputs; defaults to ON when not yet rendered.
+        """
+        txs = [tx for tx in tx_data() if tx["tx_type"] == "mRNA"]
+        if not txs:
+            return frozenset()
+        visible = set()
+        for tx in txs:
+            safe_iso = _safe_id(tx["id"])
+            try:
+                if input[f"iso_{safe_iso}"]():
+                    visible.add(tx["id"])
+            except Exception:
+                visible.add(tx["id"])
+        return frozenset(visible)
+
     # ── Debounced render inputs ────────────────────────────────────────────
     # ── Debounced toggle state (R-shiny debounce pattern) ─────────────────
     # _toggle_state holds the last *committed* snapshot of toggle inputs.
@@ -696,6 +729,7 @@ def server(input, output, session):
             tuple(sorted(priority_group_visibility().items())),
             input.strand_mode(),
             tuple(sorted(session_colors().items())),
+            active_isoforms(),
         )
         with reactive.isolate():
             last_committed = _toggle_state()
@@ -1060,6 +1094,75 @@ def server(input, output, session):
 
     @output
     @render.ui
+    def isoform_card():
+        """
+        Collapsible card listing all mRNA isoforms grouped by gene.
+        Checkboxes let users hide individual isoforms from the plot and export.
+        Re-renders (resetting all boxes to ON) whenever tx_data changes.
+        Hidden when no mRNA isoforms are loaded.
+        """
+        from collections import OrderedDict
+        txs = [tx for tx in tx_data() if tx["tx_type"] == "mRNA"]
+        if not txs:
+            return ui.div()
+
+        gene_groups = OrderedDict()
+        for tx in txs:
+            gene_groups.setdefault(tx["gene_id"], []).append(tx)
+
+        items = []
+        for gid, iso_list in gene_groups.items():
+            safe_gid = _safe_id(gid)
+            gene_lbl = _gene_label(iso_list[0])
+
+            gene_row = ui.tags.div(
+                {"class": "iso-gene-row"},
+                ui.tags.input(
+                    type="checkbox", checked=True,
+                    **{"class": "iso-gene-cb", "data-gene": safe_gid},
+                ),
+                ui.tags.label(
+                    {"class": "iso-gene-label"},
+                    gene_lbl,
+                ),
+            )
+
+            iso_rows = []
+            for tx in iso_list:
+                safe_iso = _safe_id(tx["id"])
+                iso_rows.append(ui.div(
+                    {"class": "iso-iso-cb", "data-gene": safe_gid},
+                    ui.input_checkbox(
+                        f"iso_{safe_iso}",
+                        _iso_label(tx),
+                        value=_switch_val(f"iso_{safe_iso}", True),
+                    ),
+                ))
+
+            items.append(ui.div({"class": "iso-gene-block"}, gene_row, *iso_rows))
+
+        return ui.div(
+            {"class": "card"},
+            ui.tags.details(
+                {"id": "isoform_details"},
+                ui.tags.summary("Isoforms"),
+                ui.div(
+                    {"style": "margin-top:6px;"},
+                    ui.tags.div(
+                        {"class": "iso-all-row"},
+                        ui.tags.input(
+                            type="checkbox", checked=True,
+                            **{"class": "iso-all-cb"},
+                        ),
+                        ui.tags.label({"class": "iso-all-label"}, "All"),
+                    ),
+                    *items,
+                ),
+            ),
+        )
+
+    @output
+    @render.ui
     def other_annotations_card():
         """
         Card 3: everything in avail_fts() — non-coding tx types, extra
@@ -1309,10 +1412,13 @@ def server(input, output, session):
             vv  = priority_group_visibility()
             sm  = input.strand_mode()
             col = session_colors()
+            ai  = active_isoforms()
+
+        visible_txs = [tx for tx in tx_data() if tx["tx_type"] != "mRNA" or tx["id"] in ai]
 
         # build_preview returns a go.Figure; convert it here.
         plain_fig = P.build_preview(
-            tx_data(), extra_data(), variants_data(),
+            visible_txs, extra_data(), variants_data(),
             region_start=load_start, region_end=load_end,
             load_start=load_start, load_end=load_end,
             view_start=view_start, view_end=view_end,
@@ -1428,9 +1534,11 @@ def server(input, output, session):
         def _overlaps(s, e):
             return s <= dl_end and e >= dl_start
 
+        ai = active_isoforms()
         cached_txs = [
             tx for tx in tx_data()
             if _overlaps(tx["start"], tx["end"])
+            and (tx["tx_type"] != "mRNA" or tx["id"] in ai)
         ]
 
         cached_feats = {}
