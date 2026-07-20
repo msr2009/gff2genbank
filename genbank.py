@@ -154,9 +154,11 @@ def build_genbank(
         if tx["tx_type"] == "mRNA":
             for (s, e, ftype) in tx["blocks"]:
                 if ftype == "CDS":
-                    lo = local_start(s)
-                    hi = local_start(e)
-                    cds_intervals.append((min(lo, hi), max(lo, hi)))
+                    if strand_mode == "-":
+                        lo, hi = local_start(e), local_end(s)
+                    else:
+                        lo, hi = local_start(s), local_end(e)
+                    cds_intervals.append((lo, hi))
 
     # Use the raw sequence as-is for the SeqRecord — Biopython normalises
     # case to lowercase in genbank output regardless, so case is applied
@@ -222,7 +224,7 @@ def build_genbank(
             elif ftype in ("five_prime_UTR", "three_prime_UTR"):
                 if ftype in active_ftypes:
                     utr_blocks.append((s, e, ftype))
-            elif ftype not in active_ftypes and ftype != tx["tx_type"]:
+            elif ftype not in active_ftypes:
                 continue
             else:
                 # Non-coding transcript exon blocks — label is just the

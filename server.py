@@ -357,7 +357,7 @@ def server(input, output, session):
             if errs:
                 for e in errs:
                     print(f"[startup] VALIDATION ERROR: {e}")
-                startup_msg.set(f"⚠ {errs[0]}")
+                startup_msg.set("")
                 db_ready.set(True)
                 return
             print("[startup] Default database and FASTA ready.")
