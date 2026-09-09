@@ -45,7 +45,14 @@ conda install -c bioconda samtools
 
 ### Python packages
 
-Install all Python dependencies with pip:
+Recreate the full conda environment from `environment.yml`:
+
+```bash
+mamba env create -f environment.yml   # or: conda env create -f environment.yml
+conda activate gff2genbank
+```
+
+Or install all Python dependencies with pip:
 
 ```bash
 pip install \
@@ -242,16 +249,73 @@ load, the database and FASTA are read into memory — this takes approximately
 
 ---
 
+## Batch export (CLI)
+
+`region2genbank.py` exports the same annotated GenBank file the app produces
+for a region, from the command line, with no Shiny/Plotly dependency — useful
+for scripting many regions at once.
+
+```bash
+python region2genbank.py \
+    --region III:10,901,491-10,910,085 \
+    --db c_elegans.merged.db \
+    --fasta c_elegans.PRJNA13758.WS259.genomic.fa \
+    --feature CDS --feature exon \
+    -o unc-119.gb
+```
+
+A gene name works in place of coordinates:
+
+```bash
+python region2genbank.py --region unc-119 \
+    --db c_elegans.merged.db --fasta genome.fa \
+    --feature CDS --feature exon
+```
+
+**Priority groups / variant tracks are not supported by the CLI** — only
+plain GFF featuretypes. `--feature` must be given at least once; there is no
+"all types" default, so pass every featuretype you want in the output (one
+`--feature NAME` per type). The window is padded by `LOAD_FLANK` on each
+side and, unless `--no-expand` is given, snapped outward to fully contain
+any gene that overhangs the padded window — the same behaviour the app uses
+when loading a region.
+
+To find valid names for `--feature`, list every featuretype and its count
+across the whole database (only `--db` is required):
+
+```bash
+python region2genbank.py --db c_elegans.merged.db --list-db-features
+```
+
+or scope the same listing to one region by adding `--region`:
+
+```bash
+python region2genbank.py --db c_elegans.merged.db --region unc-119 \
+    --list-db-features
+```
+
+Other flags: `--flank` (window padding, default 10,000 bp), `--max-bp` (cap
+on the loaded window, default 200,000 bp), `--strand` (`+`/`-` display
+orientation), `-o/--out` (default: `{chrom}_{start}-{end}.gb` in the current
+directory).
+
+Run `python region2genbank.py --help` for the full option list.
+
+---
+
 ## File structure
 
 ```
 app.py                Entry point — creates the Shiny App object
 config.py             Paths, colours, organism metadata, display defaults
 data.py               GFF database and FASTA loading, region and feature queries
+annotation.py         Feature-type/priority-group selection logic (shared by
+                      server.py and region2genbank.py; no Shiny dependency)
 plot.py               Plotly genome browser figure builder
 genbank.py            GenBank file serialiser (uses Biopython)
 ui.py                 Shiny UI layout
 server.py             Shiny server function and reactive logic
+region2genbank.py     Batch CLI — export a GenBank file for a region without the app
 prepare_gff.py        GFF3 preparation and merging utility
 build_db.py           gffutils database builder
 diagnose_variants.py  Debug helper: inspect variant feature types in a DB

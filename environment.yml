@@ -1,0 +1,30 @@
+# Conda environment for gff2genbank.
+#
+# Recreate with:
+#   mamba env create -f environment.yml
+# or:
+#   conda env create -f environment.yml
+#
+# Setup-pipeline-only tools (bedtools, agat, cyvcf2) are optional and listed
+# separately below — only needed when preparing a GFF/DB, not at runtime.
+
+name: gff2genbank
+channels:
+  - conda-forge
+  - bioconda
+dependencies:
+  - python=3.12
+  - samtools
+  - gffutils
+  - pyfaidx
+  - biopython
+  - pip
+  - pip:
+      - shiny>=1.0
+      - shinywidgets>=0.3
+      - plotly>=5.0
+
+  # Optional, for the setup pipeline (prepare_gff.py):
+  # - bedtools
+  # - agat
+  # - cyvcf2
