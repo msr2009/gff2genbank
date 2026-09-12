@@ -511,3 +511,8 @@ def variant_features(
 def extract_sequence(fasta_handle, chrom: str, start: int, end: int) -> str:
     """Extract genomic sequence (1-based, inclusive)."""
     return str(fasta_handle[chrom][start - 1:end])
+
+
+def chrom_length(fasta_handle, chrom: str) -> int:
+    """Return the actual length (bp) of a chromosome/contig from the indexed FASTA."""
+    return len(fasta_handle[chrom])

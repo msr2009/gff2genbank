@@ -55,15 +55,30 @@ def resolve_region(db, query):
     return chrom, start, end
 
 
-def compute_window(db, chrom, start, end, flank, expand, max_bp):
+def compute_window(db, fasta, chrom, start, end, flank, expand, max_bp):
     """Pad the requested region by flank, then optionally snap outward to
-    fully contain any overhanging mRNA (the app's default Load behavior)."""
+    fully contain any overhanging mRNA (the app's default Load behavior).
+    fasta may be None (e.g. --list-db-features with no FASTA given), in which
+    case the chromosome-length clamp below is skipped."""
     load_start = max(1, start - flank)
     load_end = end + flank
     if expand:
         load_start, load_end, _ = A.extend_load_window(
             db, chrom, load_start, load_end, max_load_bp=max_bp
         )
+
+    # Clamp to the real chromosome length — a requested end past the
+    # chromosome end is common/harmless (e.g. "to the end"), so clamp
+    # silently rather than erroring, unless the whole window is out of range.
+    if fasta is not None:
+        chrom_len = D.chrom_length(fasta, chrom)
+        if load_start > chrom_len:
+            raise ValueError(
+                f"Requested region start ({load_start:,}) is beyond the end of "
+                f"chromosome {chrom} (length {chrom_len:,})."
+            )
+        load_end = min(load_end, chrom_len)
+
     if load_end - load_start > max_bp:
         print(
             f"Warning: window {chrom}:{load_start:,}-{load_end:,} "
@@ -122,7 +137,7 @@ def export_region(db, fasta, query, feature_names, expand, flank, max_bp, strand
             f"Available: {', '.join(D.db_chroms(db))}"
         )
 
-    load_start, load_end = compute_window(db, chrom, start, end, flank, expand, max_bp)
+    load_start, load_end = compute_window(db, fasta, chrom, start, end, flank, expand, max_bp)
     txs, feats, avail_fts = load_annotations(db, chrom, load_start, load_end)
     active_ftypes = select_active(avail_fts, feature_names)
 
@@ -193,7 +208,7 @@ def main():
             if args.region:
                 chrom, start, end = resolve_region(db, args.region)
                 load_start, load_end = compute_window(
-                    db, chrom, start, end, args.flank, args.expand, args.max_bp
+                    db, None, chrom, start, end, args.flank, args.expand, args.max_bp
                 )
                 counts = region_feature_counts(db, chrom, load_start, load_end)
                 print(f"Annotation types in {chrom}:{load_start:,}-{load_end:,}:")

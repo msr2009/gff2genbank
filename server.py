@@ -205,6 +205,22 @@ def server(input, output, session):
         if load_end is None:
             load_end = g_e + LOAD_FLANK
 
+        # Clamp against the real chromosome length so downstream feature
+        # coordinates and the extracted sequence stay consistent (a requested
+        # end past the chromosome end is common/harmless — e.g. "to the end").
+        load_start = max(1, load_start)
+        try:
+            chrom_len = D.chrom_length(_fasta(), chrom)
+        except Exception:
+            chrom_len = None
+        if chrom_len is not None:
+            if load_start > chrom_len:
+                raise ValueError(
+                    f"Requested region start ({load_start:,}) is beyond the end "
+                    f"of chromosome {chrom} (length {chrom_len:,})."
+                )
+            load_end = min(load_end, chrom_len)
+
         # Determine initial view window.
         if view_start is None or view_end is None:
             # Preserve the current JS view range if it falls within the new
@@ -1315,6 +1331,15 @@ def server(input, output, session):
         # plot), so we read it here on demand from the indexed FASTA.
         # pyfaidx random-access reads are fast for any window size.
         fa = _fasta()
+        # Defensive clamp: dl_end should already be within the loaded region
+        # (itself clamped in _load_region), but guard directly against the
+        # real chromosome length in case of a stale/mismatched window.
+        try:
+            chrom_len = D.chrom_length(fa, chrom)
+            dl_start = max(1, dl_start)
+            dl_end = min(dl_end, chrom_len)
+        except Exception:
+            pass
         try:
             window_seq = D.extract_sequence(fa, chrom, dl_start, dl_end)
         except Exception as e:
